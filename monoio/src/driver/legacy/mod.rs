@@ -13,7 +13,7 @@ use super::{
     op::{CompletionMeta, Op, OpAble},
     ready::{self, Ready},
     scheduled_io::ScheduledIo,
-    Driver, Inner, CURRENT_INNER,
+    Driver, DriverInner, CURRENT_INNER,
 };
 use crate::utils::slab::Slab;
 
@@ -203,15 +203,14 @@ impl LegacyDriverInner {
         scheduledIo.wake(ready);
     }
 
-    pub(crate) fn poll_op<T: OpAble>(legacyInner: &Rc<UnsafeCell<LegacyDriverInner>>,
-                                     opAble: &mut T,
-                                     context: &mut Context<'_>) -> Poll<CompletionMeta> {
-        let legacyInner = unsafe { &mut *legacyInner.get() };
+    pub(crate) fn pollOpAble<T: OpAble>(legacyInner: &Rc<UnsafeCell<LegacyDriverInner>>,
+                                        opAble: &mut T,
+                                        context: &mut Context<'_>) -> Poll<CompletionMeta> {
+        let legacyDriverInner = unsafe { &mut *legacyInner.get() };
 
         let (directionInterest, index) = match opAble.legacy_interest() {
             Some(x) => x,
-            None => {
-                // if there is no index provided, it means the action does not rely on fd readiness. do syscall right now.
+            None => {  // the action does not rely on fd readiness. do syscall right now.
                 return Poll::Ready(CompletionMeta {
                     result: opAble.legacy_call(),
                     flags: 0,
@@ -221,7 +220,7 @@ impl LegacyDriverInner {
 
         // wait io ready and do syscall
         // 实际得到的io
-        let mut scheduledIo = legacyInner.io_dispatch.get(index).expect("scheduled_io lost");
+        let mut scheduledIo = legacyDriverInner.io_dispatch.get(index).expect("scheduled_io lost");
         let scheduledIo = scheduledIo.as_mut();
 
         // 会设置waker
@@ -245,7 +244,7 @@ impl LegacyDriverInner {
             }),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                 scheduledIo.clearReady(directionInterest.mask());
-                scheduledIo.set_waker(context, directionInterest);
+                scheduledIo.setWaker(context, directionInterest);
                 Poll::Pending
             }
             Err(e) => Poll::Ready(CompletionMeta {
@@ -270,7 +269,7 @@ impl LegacyDriverInner {
 
     pub(crate) fn submitOpAble<T: OpAble>(legacyDriverInner: &Rc<UnsafeCell<LegacyDriverInner>>, opAble: T) -> io::Result<Op<T>> {
         Ok(Op {
-            driver: Inner::Legacy(legacyDriverInner.clone()),
+            driverInner: DriverInner::Legacy(legacyDriverInner.clone()),
             // useless for legacy
             index: 0,
             opAble: Some(opAble),
@@ -286,7 +285,7 @@ impl LegacyDriverInner {
 
 impl Driver for LegacyDriver {
     fn with<R>(&self, f: impl FnOnce() -> R) -> R {
-        let inner = Inner::Legacy(self.legacyDriverInner.clone());
+        let inner = DriverInner::Legacy(self.legacyDriverInner.clone());
         CURRENT_INNER.set(&inner, f)
     }
 

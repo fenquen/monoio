@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 // 1-15 are unused
 static ID_GEN: AtomicUsize = AtomicUsize::new(16);
 
-pub(crate) const DEFAULT_THREAD_ID: usize = 0;
+pub(crate) const SPAWN_BLOCKING_THREAD_ID: usize = 0;
 
 /// Used to generate thread id.
 pub(crate) fn gen_id() -> usize {

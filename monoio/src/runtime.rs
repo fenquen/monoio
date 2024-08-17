@@ -21,7 +21,7 @@ use crate::utils::thread_id;
 #[cfg(feature = "sync")]
 thread_local! {
     pub(crate) static DEFAULT_CTX: Context = Context {
-        threadId: thread_id::DEFAULT_THREAD_ID,
+        threadId: thread_id::SPAWN_BLOCKING_THREAD_ID,
         threadId_unpark: RefCell::new(fxhash::FxHashMap::default()),
         threadId_wakerSender: RefCell::new(fxhash::FxHashMap::default()),
         taskQueue: Default::default(),

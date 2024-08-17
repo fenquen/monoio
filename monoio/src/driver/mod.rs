@@ -89,10 +89,10 @@ pub trait Driver {
     fn getUnpark(&self) -> Self::Unpark;
 }
 
-scoped_thread_local!(pub(crate) static CURRENT_INNER: Inner);
+scoped_thread_local!(pub(crate) static CURRENT_INNER: DriverInner);
 
 #[derive(Clone)]
-pub(crate) enum Inner {
+pub(crate) enum DriverInner {
     #[cfg(all(target_os = "linux", feature = "iouring"))]
     Uring(Rc<UnsafeCell<UringInner>>),
 
@@ -100,28 +100,28 @@ pub(crate) enum Inner {
     Legacy(Rc<UnsafeCell<LegacyDriverInner>>),
 }
 
-impl Inner {
+impl DriverInner {
     fn submit_with(&self, opAble: impl OpAble) -> io::Result<Op<impl OpAble>> {
         match self {
             #[cfg(all(target_os = "linux", feature = "iouring"))]
-            Inner::Uring(this) => UringInner::submit_with_data(this, opAble),
+            DriverInner::Uring(this) => UringInner::submit_with_data(this, opAble),
             #[cfg(feature = "legacy")]
-            Inner::Legacy(legacyInner) => LegacyDriverInner::submitOpAble(legacyInner, opAble),
+            DriverInner::Legacy(legacyInner) => LegacyDriverInner::submitOpAble(legacyInner, opAble),
             #[cfg(all(not(feature = "legacy"), not(all(target_os = "linux", feature = "iouring"))))]
             _ => { util::feature_panic(); }
         }
     }
 
     #[allow(unused)]
-    fn poll_op<T: OpAble>(&self,
-                          opAble: &mut T,
-                          index: usize,
-                          cx: &mut Context<'_>) -> Poll<CompletionMeta> {
+    fn pollOpAble<T: OpAble>(&self,
+                             opAble: &mut T,
+                             index: usize,
+                             cx: &mut Context<'_>) -> Poll<CompletionMeta> {
         match self {
             #[cfg(all(target_os = "linux", feature = "iouring"))]
-            Inner::Uring(this) => UringInner::poll_op(this, index, cx),
+            DriverInner::Uring(this) => UringInner::poll_op(this, index, cx),
             #[cfg(feature = "legacy")]
-            Inner::Legacy(legacyInner) => LegacyDriverInner::poll_op::<T>(legacyInner, opAble, cx),
+            DriverInner::Legacy(legacyInner) => LegacyDriverInner::pollOpAble::<T>(legacyInner, opAble, cx),
             #[cfg(all(not(feature = "legacy"), not(all(target_os = "linux", feature = "iouring"))))]
             _ => { util::feature_panic();}
         }
@@ -135,9 +135,9 @@ impl Inner {
     ) -> Poll<CompletionMeta> {
         match self {
             #[cfg(all(target_os = "linux", feature = "iouring"))]
-            Inner::Uring(this) => UringInner::poll_legacy_op(this, data, cx),
+            DriverInner::Uring(this) => UringInner::poll_legacy_op(this, data, cx),
             #[cfg(feature = "legacy")]
-            Inner::Legacy(legacyInner) => LegacyDriverInner::poll_op::<T>(legacyInner, data, cx),
+            DriverInner::Legacy(legacyInner) => LegacyDriverInner::pollOpAble::<T>(legacyInner, data, cx),
             #[cfg(all(
                 not(feature = "legacy"),
                 not(all(target_os = "linux", feature = "iouring"))
@@ -152,9 +152,9 @@ impl Inner {
     fn drop_op<T: 'static>(&self, index: usize, data: &mut Option<T>) {
         match self {
             #[cfg(all(target_os = "linux", feature = "iouring"))]
-            Inner::Uring(this) => UringInner::drop_op(this, index, data),
+            DriverInner::Uring(this) => UringInner::drop_op(this, index, data),
             #[cfg(feature = "legacy")]
-            Inner::Legacy(_) => {}
+            DriverInner::Legacy(_) => {}
             #[cfg(all(
                 not(feature = "legacy"),
                 not(all(target_os = "linux", feature = "iouring"))
@@ -169,9 +169,9 @@ impl Inner {
     pub(super) unsafe fn cancel_op(&self, op_canceller: &op::OpCanceller) {
         match self {
             #[cfg(all(target_os = "linux", feature = "iouring"))]
-            Inner::Uring(this) => UringInner::cancel_op(this, op_canceller.index),
+            DriverInner::Uring(this) => UringInner::cancel_op(this, op_canceller.index),
             #[cfg(feature = "legacy")]
-            Inner::Legacy(this) => {
+            DriverInner::Legacy(this) => {
                 if let Some(direction) = op_canceller.direction {
                     LegacyDriverInner::cancel_op(this, op_canceller.index, direction)
                 }
@@ -247,9 +247,9 @@ impl UnparkHandle {
     pub(crate) fn current() -> Self {
         CURRENT_INNER.with(|inner| match inner {
             #[cfg(all(target_os = "linux", feature = "iouring"))]
-            Inner::Uring(this) => UringInner::unpark(this).into(),
+            DriverInner::Uring(this) => UringInner::unpark(this).into(),
             #[cfg(feature = "legacy")]
-            Inner::Legacy(this) => LegacyDriverInner::getLegacyUnpark(this).into(),
+            DriverInner::Legacy(this) => LegacyDriverInner::getLegacyUnpark(this).into(),
         })
     }
 }

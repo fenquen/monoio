@@ -134,7 +134,7 @@ impl TcpStream {
             } else {
                 // set writable as init state
                 crate::driver::CURRENT_INNER.with(|inner| match inner {
-                    crate::driver::Inner::Legacy(inner) => {
+                    crate::driver::DriverInner::Legacy(inner) => {
                         let idx = stream.fd.registered_index().unwrap();
                         if let Some(mut readiness) =
                             unsafe { &mut *inner.get() }.io_dispatch.get(idx)

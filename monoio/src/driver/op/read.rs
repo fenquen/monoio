@@ -82,8 +82,8 @@ impl<T: IoBufMut> OpAble for Read<T> {
     #[cfg(all(any(feature = "legacy", feature = "poll-io"), unix))]
     fn legacy_call(&mut self) -> io::Result<u32> {
         let fd = self.sharedFd.as_raw_fd();
-        let seek_offset = libc::off_t::try_from(self.offset)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "offset too big"))?;
+        let seek_offset = libc::off_t::try_from(self.offset).map_err(|_| io::Error::new(io::ErrorKind::Other, "offset too big"))?;
+
         #[cfg(not(target_os = "macos"))]
         return syscall_u32!(pread64(
             fd,
@@ -93,12 +93,12 @@ impl<T: IoBufMut> OpAble for Read<T> {
         ));
 
         #[cfg(target_os = "macos")]
-        return syscall_u32!(pread(
+        syscall_u32!(pread(
             fd,
             self.buf.write_ptr() as _,
             self.buf.bytes_total(),
             seek_offset
-        ));
+        ))
     }
 
     #[cfg(all(any(feature = "legacy", feature = "poll-io"), windows))]

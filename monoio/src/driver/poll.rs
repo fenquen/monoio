@@ -89,7 +89,7 @@ impl Poll {
             }),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                 ref_mut.clearReady(direction.mask());
-                ref_mut.set_waker(cx, direction);
+                ref_mut.setWaker(cx, direction);
                 std::task::Poll::Pending
             }
             Err(e) => std::task::Poll::Ready(CompletionMeta {

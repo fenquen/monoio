@@ -47,6 +47,8 @@ pub use runtime::{spawn, Runtime};
 #[cfg(any(all(target_os = "linux", feature = "iouring"), feature = "legacy"))]
 pub use {builder::FusionDriver, runtime::FusionRuntime};
 
+pub type BufResult<T, B> = (std::io::Result<T>, B);
+
 /// Start a monoio runtime.
 /// ```no_run
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -72,14 +74,7 @@ pub use {builder::FusionDriver, runtime::FusionRuntime};
 ///     r
 /// }
 /// ```
-pub fn start<D, F>(future: F) -> F::Output
-where
-    F: Future,
-    F::Output: 'static,
-    D: Buildable + Driver,
-{
-    let mut rt = Buildable::buildRuntime(RuntimeBuilder::<D>::new()).expect("Unable to build runtime.");
-    rt.block_on(future)
+pub fn start<D: Buildable + Driver, F: Future<Output: 'static + Sized>>(future: F) -> F::Output {
+    let mut runtime = Buildable::buildRuntime(RuntimeBuilder::<D>::new()).unwrap();
+    runtime.block_on(future)
 }
-
-pub type BufResult<T, B> = (std::io::Result<T>, B);

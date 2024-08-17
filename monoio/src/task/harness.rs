@@ -11,7 +11,7 @@ use crate::{
         state::StateSnapshot,
         Schedule, Task,
     },
-    utils::thread_id::{try_get_current_thread_id, DEFAULT_THREAD_ID},
+    utils::thread_id::{try_get_current_thread_id, SPAWN_BLOCKING_THREAD_ID},
 };
 use crate::task::state::TransitionToNotified;
 use crate::task::waker_ref;
@@ -297,7 +297,7 @@ impl<T: Future, S: Schedule> Harness<T, S> {
 
 /// 是不是其它线程上的
 fn is_remote_task(threadId: usize) -> bool {
-    if threadId == DEFAULT_THREAD_ID {
+    if threadId == SPAWN_BLOCKING_THREAD_ID {
         return true;
     }
 

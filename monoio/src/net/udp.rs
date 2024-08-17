@@ -40,8 +40,8 @@ impl UdpSocket {
         crate::driver::CURRENT_INNER.with(|x| match x {
             // TODO: windows ioring support
             #[cfg(all(target_os = "linux", feature = "iouring"))]
-            crate::driver::Inner::Uring(_) => Ok(()),
-            crate::driver::Inner::Legacy(_) => _socket.set_nonblocking(true),
+            crate::driver::DriverInner::Uring(_) => Ok(()),
+            crate::driver::DriverInner::Legacy(_) => _socket.set_nonblocking(true),
         })
     }
 

@@ -4,7 +4,7 @@ use std::{future::Future, task::Poll};
 
 use threadpool::{Builder as ThreadPoolBuilder, ThreadPool as ThreadPoolImpl};
 
-use crate::{task::{JoinHandle}, task, utils::thread_id::DEFAULT_THREAD_ID};
+use crate::{task::{JoinHandle}, task, utils::thread_id::SPAWN_BLOCKING_THREAD_ID};
 use crate::task::Schedule;
 
 /// Users may implement a ThreadPool and attach it to runtime.
@@ -91,7 +91,7 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    let (task, join) = task::newTask(DEFAULT_THREAD_ID, BlockingFuture(Some(func)), NoopScheduler);
+    let (task, join) = task::newTask(SPAWN_BLOCKING_THREAD_ID, BlockingFuture(Some(func)), NoopScheduler);
     crate::runtime::CURRENT_CONTEXT.with(|inner| {
         let handle = &inner.blocking_handle;
         match handle {

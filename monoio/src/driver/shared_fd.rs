@@ -42,13 +42,13 @@ impl State {
             let reg = CURRENT_INNER
                 .with(|inner| match inner {
                     #[cfg(all(target_os = "linux", feature = "iouring"))]
-                    crate::driver::Inner::Uring(r) => super::IoUringDriver::register_poll_io(
+                    crate::driver::DriverInner::Uring(r) => super::IoUringDriver::register_poll_io(
                         r,
                         &mut source,
                         super::ready::RW_INTERESTS,
                     ),
                     #[cfg(feature = "legacy")]
-                    crate::driver::Inner::Legacy(_) => panic!("unexpected legacy runtime"),
+                    crate::driver::DriverInner::Legacy(_) => panic!("unexpected legacy runtime"),
                 })
                 .map_err(|e| {
                     let _ = crate::syscall!(fcntl(fd, libc::F_SETFL, 0));
@@ -84,11 +84,11 @@ impl State {
         CURRENT_INNER
             .with(|inner| match inner {
                 #[cfg(all(target_os = "linux", feature = "iouring"))]
-                crate::driver::Inner::Uring(r) => {
+                crate::driver::DriverInner::Uring(r) => {
                     super::IoUringDriver::deregister_poll_io(r, &mut source, *token)
                 }
                 #[cfg(feature = "legacy")]
-                crate::driver::Inner::Legacy(_) => panic!("unexpected legacy runtime"),
+                crate::driver::DriverInner::Legacy(_) => panic!("unexpected legacy runtime"),
             })
             .map_err(|e| {
                 let _ = crate::syscall!(fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK));
@@ -150,7 +150,7 @@ impl SharedFd {
 
         #[cfg(all(target_os = "linux", feature = "iouring", feature = "legacy"))]
         let state = match CURRENT_INNER.with(|inner| match inner {
-            super::Inner::Uring(inner) => match FORCE_LEGACY {
+            super::DriverInner::Uring(inner) => match FORCE_LEGACY {
                 false => Reg::Uring,
                 true => {
                     #[cfg(feature = "poll-io")]
@@ -166,7 +166,7 @@ impl SharedFd {
                     Reg::Uring
                 }
             },
-            super::Inner::Legacy(inner) => {
+            super::DriverInner::Legacy(inner) => {
                 let mut source = mio::unix::SourceFd(&rawFd);
                 Reg::Legacy(super::legacy::LegacyDriver::register(
                     inner,
@@ -187,7 +187,7 @@ impl SharedFd {
         #[cfg(all(unix, feature = "legacy", not(all(target_os = "linux", feature = "iouring"))))]
         let state = {
             let indexInSlab = CURRENT_INNER.with(|inner| match inner {
-                super::Inner::Legacy(legacyInner) => {
+                super::DriverInner::Legacy(legacyInner) => {
                     let mut source = mio::unix::SourceFd(&rawFd);
                     LegacyDriver::register(legacyInner, &mut source, super::ready::RW_INTERESTS)
                 }
@@ -214,9 +214,9 @@ impl SharedFd {
     pub(crate) fn new_without_register(fd: RawFd) -> SharedFd {
         let state = CURRENT_INNER.with(|inner| match inner {
             #[cfg(all(target_os = "linux", feature = "iouring"))]
-            super::Inner::Uring(_) => State::Uring(UringState::Init),
+            super::DriverInner::Uring(_) => State::Uring(UringState::Init),
             #[cfg(feature = "legacy")]
-            super::Inner::Legacy(_) => State::Legacy(None),
+            super::DriverInner::Legacy(_) => State::Legacy(None),
             #[cfg(all(not(feature = "legacy"), not(all(target_os = "linux", feature = "iouring"))))]
             _ => {
                 super::util::feature_panic();
@@ -263,10 +263,10 @@ impl SharedFd {
                         CURRENT_INNER.with(|inner| {
                             match inner {
                                 #[cfg(all(target_os = "linux", feature = "iouring"))]
-                                super::Inner::Uring(_) => {
+                                super::DriverInner::Uring(_) => {
                                     unreachable!("try_unwrap legacy fd with uring runtime")
                                 }
-                                super::Inner::Legacy(inner) => {
+                                super::DriverInner::Legacy(inner) => {
                                     // deregister it from driver(Poll and slab) and close fd
                                     if let Some(idx) = idx {
                                         let mut source = mio::unix::SourceFd(&fd);
@@ -429,10 +429,10 @@ fn drop_legacy(mut fd: RawFd, indexInSlab: Option<usize>) {
             #[cfg(any(all(target_os = "linux", feature = "iouring"), feature = "legacy"))]
             match inner {
                 #[cfg(all(target_os = "linux", feature = "iouring"))]
-                super::Inner::Uring(_) => {
+                super::DriverInner::Uring(_) => {
                     unreachable!("close legacy fd with uring runtime")
                 }
-                super::Inner::Legacy(inner) => {
+                super::DriverInner::Legacy(inner) => {
                     // deregister it from driver(Poll and slab) and close fd
                     #[cfg(not(windows))]
                     if let Some(indexInSlab) = indexInSlab {
@@ -453,11 +453,11 @@ fn drop_uring_legacy(fd: RawFd, idx: Option<usize>) {
         CURRENT_INNER.with(|inner| {
             match inner {
                 #[cfg(feature = "legacy")]
-                super::Inner::Legacy(_) => {
+                super::DriverInner::Legacy(_) => {
                     unreachable!("close uring fd with legacy runtime")
                 }
                 #[cfg(all(target_os = "linux", feature = "iouring"))]
-                super::Inner::Uring(inner) => {
+                super::DriverInner::Uring(inner) => {
                     // deregister it from driver(Poll and slab) and close fd
                     if let Some(idx) = idx {
                         let mut source = mio::unix::SourceFd(&fd);

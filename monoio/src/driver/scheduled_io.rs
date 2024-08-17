@@ -68,12 +68,12 @@ impl ScheduledIo {
             return Poll::Ready(ready);
         }
 
-        self.set_waker(cx, direction);
+        self.setWaker(cx, direction);
 
         Poll::Pending
     }
 
-    pub(crate) fn set_waker(&mut self, cx: &mut Context<'_>, direction: Direction) {
+    pub(crate) fn setWaker(&mut self, cx: &mut Context<'_>, direction: Direction) {
         let slot = match direction {
             Direction::Read => &mut self.readWaker,
             Direction::Write => &mut self.writeWaker,

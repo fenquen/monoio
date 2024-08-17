@@ -25,7 +25,7 @@ mod splice;
 /// In-flight operation
 pub(crate) struct Op<T: 'static> {
     // Driver running the operation
-    pub(super) driver: driver::Inner,
+    pub(super) driverInner: driver::DriverInner,
 
     // Operation index in the slab(useless for legacy)
     pub(super) index: usize,
@@ -156,7 +156,7 @@ impl<T: Unpin + OpAble + 'static,> Future for Op<T> {
         let op = &mut *self;
         let opAble = op.opAble.as_mut().expect("unexpected operation state");
 
-        let completionMeta = ready!(op.driver.poll_op::<T>(opAble, op.index, cx));
+        let completionMeta = ready!(op.driverInner.pollOpAble::<T>(opAble, op.index, cx));
 
         op.index = usize::MAX;
         let data = op.opAble.take().expect("unexpected operation state");
@@ -166,7 +166,7 @@ impl<T: Unpin + OpAble + 'static,> Future for Op<T> {
 
 impl<T> Drop for Op<T> {
     fn drop(&mut self) {
-        self.driver.drop_op(self.index, &mut self.opAble);
+        self.driverInner.drop_op(self.index, &mut self.opAble);
     }
 }
 

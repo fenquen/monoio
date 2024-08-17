@@ -19,7 +19,7 @@ use super::{
     // scheduled_io::ScheduledIo,
     util::timespec,
     Driver,
-    Inner,
+    DriverInner,
     CURRENT_INNER,
 };
 use crate::utils::slab::Slab;
@@ -348,7 +348,7 @@ impl Driver for IoUringDriver {
     /// Enter the driver context. This enables using uring types.
     fn with<R>(&self, f: impl FnOnce() -> R) -> R {
         // TODO(ihciah): remove clone
-        let inner = Inner::Uring(self.inner.clone());
+        let inner = DriverInner::Uring(self.inner.clone());
         CURRENT_INNER.set(&inner, f)
     }
 
@@ -421,9 +421,9 @@ impl UringInner {
         }
     }
 
-    fn new_op<T>(data: T, inner: &mut UringInner, driver: Inner) -> Op<T> {
+    fn new_op<T>(data: T, inner: &mut UringInner, driver: DriverInner) -> Op<T> {
         Op {
-            driver,
+            driverInner: driver,
             index: inner.ops.insert(),
             opAble: Some(data),
         }
@@ -443,7 +443,7 @@ impl UringInner {
         }
 
         // Create the operation
-        let mut op = Self::new_op(data, inner, Inner::Uring(this.clone()));
+        let mut op = Self::new_op(data, inner, DriverInner::Uring(this.clone()));
 
         // Configure the SQE
         let data_mut = unsafe { op.data.as_mut().unwrap_unchecked() };
