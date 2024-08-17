@@ -63,8 +63,7 @@ pub type BufResult<T, B> = (std::io::Result<T>, B);
 ///         // we get the buffer back.
 ///         let (res, buf) = file.read_at(buf, 0).await;
 ///         let n = res?;
-///
-///         // Display the contents
+/// 
 ///         println!("{:?}", &buf[..n]);
 ///
 ///         Ok(())
