@@ -31,10 +31,8 @@ macro_rules! scoped_thread_local {
     ($(#[$attrs:meta])* $vis:vis static $name:ident: $ty:ty) => (
         $(#[$attrs])*
         $vis static $name: $crate::macros::scoped_tls::ScopedKey<$ty> = $crate::macros::scoped_tls::ScopedKey {
-            inner: {
-                thread_local!(static FOO: ::std::cell::Cell<*const ()> = {
-                    ::std::cell::Cell::new(::std::ptr::null())
-                });
+            localKey: {
+                thread_local!(static FOO: ::std::cell::Cell<*const ()> = {::std::cell::Cell::new(::std::ptr::null())});
                 &FOO
             },
             _marker: ::std::marker::PhantomData,
@@ -51,7 +49,8 @@ macro_rules! scoped_thread_local {
 /// their contents.
 pub struct ScopedKey<T> {
     #[doc(hidden)]
-    pub inner: &'static LocalKey<Cell<*const ()>>,
+    pub localKey: &'static LocalKey<Cell<*const ()>>,
+
     #[doc(hidden)]
     pub _marker: marker::PhantomData<T>,
 }
@@ -67,28 +66,29 @@ impl<T> ScopedKey<T> {
     ///
     /// Upon return, this function will restore the previous value, if any
     /// was available.
-    pub fn set<F, R>(&'static self, t: &T, f: F) -> R
-    where
-        F: FnOnce() -> R,
-    {
+    pub fn set<R>(&'static self, t: &T, f: impl FnOnce() -> R) -> R {
         struct Reset {
             key: &'static LocalKey<Cell<*const ()>>,
             val: *const (),
         }
+
         impl Drop for Reset {
             fn drop(&mut self) {
                 self.key.with(|c| c.set(self.val));
             }
         }
-        let prev = self.inner.with(|c| {
+
+        let prev = self.localKey.with(|c| {
             let prev = c.get();
             c.set(t as *const T as *const ());
             prev
         });
+
         let _reset = Reset {
-            key: self.inner,
+            key: self.localKey,
             val: prev,
         };
+
         f()
     }
 
@@ -96,15 +96,9 @@ impl<T> ScopedKey<T> {
     ///
     /// This function takes a closure which receives the value of this
     /// variable.
-    pub fn with<F, R>(&'static self, f: F) -> R
-    where
-        F: FnOnce(&T) -> R,
-    {
-        let val = self.inner.with(|c| c.get());
-        assert!(
-            !val.is_null(),
-            "cannot access a scoped thread local variable without calling `set` first"
-        );
+    pub fn with<F, R>(&'static self, f: impl FnOnce(&T) -> R) -> R {
+        let val = self.localKey.with(|c| c.get());
+        assert!(!val.is_null(), "cannot access a scoped thread local variable without calling `set` first");
         unsafe { f(&*(val as *const T)) }
     }
 
@@ -113,7 +107,7 @@ impl<T> ScopedKey<T> {
     where
         F: FnOnce(Option<&T>) -> R,
     {
-        let val = self.inner.with(|c| c.get());
+        let val = self.localKey.with(|c| c.get());
         if val.is_null() {
             f(None)
         } else {
@@ -124,6 +118,6 @@ impl<T> ScopedKey<T> {
     /// Test whether this TLS key has been `set` for the current thread.
     #[inline]
     pub fn is_set(&'static self) -> bool {
-        self.inner.with(|c| !c.get().is_null())
+        self.localKey.with(|c| !c.get().is_null())
     }
 }

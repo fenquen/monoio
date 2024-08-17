@@ -7,51 +7,46 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use super::{
     op::{CompletionMeta, Op, OpAble},
     ready::{self, Ready},
     scheduled_io::ScheduledIo,
-    Driver, Inner, CURRENT,
+    Driver, Inner, CURRENT_INNER,
 };
 use crate::utils::slab::Slab;
-
-#[allow(missing_docs, unreachable_pub, dead_code, unused_imports)]
-#[cfg(windows)]
-pub(super) mod iocp;
 
 #[cfg(feature = "sync")]
 mod waker;
 #[cfg(feature = "sync")]
-pub(crate) use waker::UnparkHandle;
-
-pub(crate) struct LegacyInner {
-    pub(crate) io_dispatch: Slab<ScheduledIo>,
-    #[cfg(unix)]
-    events: mio::Events,
-    #[cfg(unix)]
-    poll: mio::Poll,
-    #[cfg(windows)]
-    events: iocp::Events,
-    #[cfg(windows)]
-    poll: iocp::Poller,
-
-    #[cfg(feature = "sync")]
-    shared_waker: std::sync::Arc<waker::EventWaker>,
-
-    // Waker receiver
-    #[cfg(feature = "sync")]
-    waker_receiver: flume::Receiver<std::task::Waker>,
-}
+pub(crate) use waker::LegacyUnpark;
+use crate::driver::legacy::waker::MioWakerWrapper;
 
 /// Driver with Poll-like syscall.
 #[allow(unreachable_pub)]
 pub struct LegacyDriver {
-    inner: Rc<UnsafeCell<LegacyInner>>,
+    legacyDriverInner: Rc<UnsafeCell<LegacyDriverInner>>,
 
     // Used for drop
     #[cfg(feature = "sync")]
-    thread_id: usize,
+    threadId: usize,
+}
+
+pub(crate) struct LegacyDriverInner {
+    pub(crate) io_dispatch: Slab<ScheduledIo>,
+
+    #[cfg(unix)]
+    mioEvents: mio::Events,
+
+    #[cfg(unix)]
+    mioPoll: mio::Poll,
+
+    #[cfg(feature = "sync")]
+    mioWakerWrapper: Arc<MioWakerWrapper>,
+
+    #[cfg(feature = "sync")]
+    wakerReceiver: flume::Receiver<std::task::Waker>,
 }
 
 #[cfg(feature = "sync")]
@@ -65,184 +60,129 @@ impl LegacyDriver {
         Self::new_with_entries(Self::DEFAULT_ENTRIES)
     }
 
-    pub(crate) fn new_with_entries(entries: u32) -> io::Result<Self> {
+    pub(crate) fn new_with_entries(entries: u32) -> io::Result<LegacyDriver> {
         #[cfg(unix)]
-        let poll = mio::Poll::new()?;
-        #[cfg(windows)]
-        let poll = iocp::Poller::new()?;
+        let mioPoll = mio::Poll::new()?;
 
         #[cfg(all(unix, feature = "sync"))]
-        let shared_waker = std::sync::Arc::new(waker::EventWaker::new(mio::Waker::new(
-            poll.registry(),
-            TOKEN_WAKEUP,
-        )?));
-        #[cfg(all(windows, feature = "sync"))]
-        let shared_waker = std::sync::Arc::new(waker::EventWaker::new(iocp::Waker::new(
-            &poll,
-            TOKEN_WAKEUP,
-        )?));
-        #[cfg(feature = "sync")]
-        let (waker_sender, waker_receiver) = flume::unbounded::<std::task::Waker>();
-        #[cfg(feature = "sync")]
-        let thread_id = crate::builder::BUILD_THREAD_ID.with(|id| *id);
+        let mioWakerWrapper = Arc::new(MioWakerWrapper::new(mio::Waker::new(mioPoll.registry(), TOKEN_WAKEUP)?));
 
-        let inner = LegacyInner {
+        #[cfg(feature = "sync")]
+        let (wakerSender, wakerReceiver) = flume::unbounded::<std::task::Waker>();
+
+        #[cfg(feature = "sync")]
+        let threadId = crate::builder::BUILD_THREAD_ID.with(|id| *id);
+
+        let legacyInner = LegacyDriverInner {
             io_dispatch: Slab::new(),
             #[cfg(unix)]
-            events: mio::Events::with_capacity(entries as usize),
+            mioEvents: mio::Events::with_capacity(entries as usize),
             #[cfg(unix)]
-            poll,
-            #[cfg(windows)]
-            events: iocp::Events::with_capacity(entries as usize),
-            #[cfg(windows)]
-            poll,
+            mioPoll,
             #[cfg(feature = "sync")]
-            shared_waker,
+            mioWakerWrapper,
             #[cfg(feature = "sync")]
-            waker_receiver,
+            wakerReceiver,
         };
-        let driver = Self {
-            inner: Rc::new(UnsafeCell::new(inner)),
-            #[cfg(feature = "sync")]
-            thread_id,
+
+        let legacyDriver = LegacyDriver {
+            legacyDriverInner: Rc::new(UnsafeCell::new(legacyInner)),
+            threadId,
         };
 
         // Register unpark handle
         #[cfg(feature = "sync")]
         {
-            let unpark = driver.unpark();
-            super::thread::register_unpark_handle(thread_id, unpark.into());
-            super::thread::register_waker_sender(thread_id, waker_sender);
+            let unpark = legacyDriver.getUnpark();
+            super::thread::register_unpark_handle(threadId, unpark.into());
+            super::thread::register_waker_sender(threadId, wakerSender);
         }
 
-        Ok(driver)
+        Ok(legacyDriver)
     }
 
     fn inner_park(&self, mut timeout: Option<Duration>) -> io::Result<()> {
-        let inner = unsafe { &mut *self.inner.get() };
+        let legacyDriverInner = unsafe { &mut *self.legacyDriverInner.get() };
 
         #[allow(unused_mut)]
-        let mut need_wait = true;
+        let mut needWait = true;
+
         #[cfg(feature = "sync")]
         {
-            // Process foreign wakers
-            while let Ok(w) = inner.waker_receiver.try_recv() {
-                w.wake();
-                need_wait = false;
+            // process foreign wakers
+            while let Ok(waker) = legacyDriverInner.wakerReceiver.try_recv() {
+                waker.wake();
+                needWait = false;
             }
 
-            // Set status as not awake if we are going to sleep
-            if need_wait {
-                inner
-                    .shared_waker
-                    .awake
-                    .store(false, std::sync::atomic::Ordering::Release);
+            // set status as not awake if we are going to sleep
+            if needWait {
+                legacyDriverInner.mioWakerWrapper.awake.store(false, Ordering::Release);
             }
 
-            // Process foreign wakers left
-            while let Ok(w) = inner.waker_receiver.try_recv() {
-                w.wake();
-                need_wait = false;
+            // process foreign wakers left
+            while let Ok(waker) = legacyDriverInner.wakerReceiver.try_recv() {
+                waker.wake();
+                needWait = false;
             }
         }
 
-        if !need_wait {
+        if !needWait {
             timeout = Some(Duration::ZERO);
         }
 
         // here we borrow 2 mut self, but its safe.
-        let events = unsafe { &mut (*self.inner.get()).events };
-        match inner.poll.poll(events, timeout) {
+        let mioEvents = unsafe { &mut (*self.legacyDriverInner.get()).mioEvents };
+
+        match legacyDriverInner.mioPoll.poll(mioEvents, timeout) {
             Ok(_) => {}
             Err(ref e) if e.kind() == io::ErrorKind::Interrupted => {}
             Err(e) => return Err(e),
         }
-        #[cfg(unix)]
-        let iter = events.iter();
-        #[cfg(windows)]
-        let iter = events.events.iter();
-        for event in iter {
-            let token = event.token();
+
+        for mioEvent in mioEvents.iter() {
+            let token = mioEvent.token();
 
             #[cfg(feature = "sync")]
             if token != TOKEN_WAKEUP {
-                inner.dispatch(token, Ready::from_mio(event));
+                legacyDriverInner.dispatch(token, Ready::fromMioEvent(mioEvent));
             }
 
             #[cfg(not(feature = "sync"))]
-            inner.dispatch(token, Ready::from_mio(event));
+            inner.dispatch(token, Ready::fromMioEvent(mioEvent));
         }
+
         Ok(())
     }
 
-    #[cfg(windows)]
-    pub(crate) fn register(
-        this: &Rc<UnsafeCell<LegacyInner>>,
-        state: &mut iocp::SocketState,
-        interest: mio::Interest,
-    ) -> io::Result<usize> {
-        let inner = unsafe { &mut *this.get() };
-        let io = ScheduledIo::default();
-        let token = inner.io_dispatch.insert(io);
-
-        match inner.poll.register(state, mio::Token(token), interest) {
-            Ok(_) => Ok(token),
-            Err(e) => {
-                inner.io_dispatch.remove(token);
-                Err(e)
-            }
-        }
-    }
-
-    #[cfg(windows)]
-    pub(crate) fn deregister(
-        this: &Rc<UnsafeCell<LegacyInner>>,
-        token: usize,
-        state: &mut iocp::SocketState,
-    ) -> io::Result<()> {
-        let inner = unsafe { &mut *this.get() };
-
-        // try to deregister fd first, on success we will remove it from slab.
-        match inner.poll.deregister(state) {
-            Ok(_) => {
-                inner.io_dispatch.remove(token);
-                Ok(())
-            }
-            Err(e) => Err(e),
-        }
-    }
-
     #[cfg(unix)]
-    pub(crate) fn register(
-        this: &Rc<UnsafeCell<LegacyInner>>,
-        source: &mut impl mio::event::Source,
-        interest: mio::Interest,
-    ) -> io::Result<usize> {
-        let inner = unsafe { &mut *this.get() };
-        let token = inner.io_dispatch.insert(ScheduledIo::new());
+    pub(crate) fn register(legacyInner: &Rc<UnsafeCell<LegacyDriverInner>>,
+                           source: &mut impl mio::event::Source,
+                           interest: mio::Interest) -> io::Result<usize> {
+        let legacyInner = unsafe { &mut *legacyInner.get() };
+        let indexInSlab = legacyInner.io_dispatch.insert(ScheduledIo::new());
 
-        let registry = inner.poll.registry();
-        match registry.register(source, mio::Token(token), interest) {
-            Ok(_) => Ok(token),
+        let registry = legacyInner.mioPoll.registry();
+
+        match registry.register(source, mio::Token(indexInSlab), interest) {
+            Ok(_) => Ok(indexInSlab),
             Err(e) => {
-                inner.io_dispatch.remove(token);
+                legacyInner.io_dispatch.remove(indexInSlab);
                 Err(e)
             }
         }
     }
 
     #[cfg(unix)]
-    pub(crate) fn deregister(
-        this: &Rc<UnsafeCell<LegacyInner>>,
-        token: usize,
-        source: &mut impl mio::event::Source,
-    ) -> io::Result<()> {
-        let inner = unsafe { &mut *this.get() };
+    pub(crate) fn deregister(legacyDriverInner: &Rc<UnsafeCell<LegacyDriverInner>>,
+                             indexInSlab: usize,
+                             source: &mut impl mio::event::Source) -> io::Result<()> {
+        let legacyDriverInner = unsafe { &mut *legacyDriverInner.get() };
 
         // try to deregister fd first, on success we will remove it from slab.
-        match inner.poll.registry().deregister(source) {
+        match legacyDriverInner.mioPoll.registry().deregister(source) {
             Ok(_) => {
-                inner.io_dispatch.remove(token);
+                legacyDriverInner.io_dispatch.remove(indexInSlab);
                 Ok(())
             }
             Err(e) => Err(e),
@@ -250,61 +190,62 @@ impl LegacyDriver {
     }
 }
 
-impl LegacyInner {
-    fn dispatch(&mut self, token: mio::Token, ready: Ready) {
-        let mut sio = match self.io_dispatch.get(token.0) {
-            Some(io) => io,
-            None => {
-                return;
-            }
-        };
-        let ref_mut = sio.as_mut();
-        ref_mut.set_readiness(|curr| curr | ready);
-        ref_mut.wake(ready);
+impl LegacyDriverInner {
+    fn dispatch(&mut self, mioToken: mio::Token, ready: Ready) {
+        let mut scheduledIo =
+            match self.io_dispatch.get(mioToken.0) {
+                Some(scheduledIo) => scheduledIo,
+                None => return
+            };
+
+        let scheduledIo = scheduledIo.as_mut();
+        scheduledIo.setReady(|curr| curr | ready);
+        scheduledIo.wake(ready);
     }
 
-    pub(crate) fn poll_op<T: OpAble>(
-        this: &Rc<UnsafeCell<Self>>,
-        data: &mut T,
-        cx: &mut Context<'_>,
-    ) -> Poll<CompletionMeta> {
-        let inner = unsafe { &mut *this.get() };
-        let (direction, index) = match data.legacy_interest() {
+    pub(crate) fn poll_op<T: OpAble>(legacyInner: &Rc<UnsafeCell<LegacyDriverInner>>,
+                                     opAble: &mut T,
+                                     context: &mut Context<'_>) -> Poll<CompletionMeta> {
+        let legacyInner = unsafe { &mut *legacyInner.get() };
+
+        let (directionInterest, index) = match opAble.legacy_interest() {
             Some(x) => x,
             None => {
-                // if there is no index provided, it means the action does not rely on fd
-                // readiness. do syscall right now.
+                // if there is no index provided, it means the action does not rely on fd readiness. do syscall right now.
                 return Poll::Ready(CompletionMeta {
-                    result: OpAble::legacy_call(data),
+                    result: opAble.legacy_call(),
                     flags: 0,
                 });
             }
         };
 
         // wait io ready and do syscall
-        let mut scheduled_io = inner.io_dispatch.get(index).expect("scheduled_io lost");
-        let ref_mut = scheduled_io.as_mut();
+        // 实际得到的io
+        let mut scheduledIo = legacyInner.io_dispatch.get(index).expect("scheduled_io lost");
+        let scheduledIo = scheduledIo.as_mut();
 
-        let readiness = ready!(ref_mut.poll_readiness(cx, direction));
+        // 会设置waker
+        let ready = ready!(scheduledIo.isReady(context, directionInterest));
 
         // check if canceled
-        if readiness.is_canceled() {
+        if ready.is_canceled() {
             // clear CANCELED part only
-            ref_mut.clear_readiness(readiness & Ready::CANCELED);
+            scheduledIo.clearReady(ready & Ready::CANCELED);
+
             return Poll::Ready(CompletionMeta {
                 result: Err(io::Error::from_raw_os_error(125)),
                 flags: 0,
             });
         }
 
-        match OpAble::legacy_call(data) {
-            Ok(n) => Poll::Ready(CompletionMeta {
-                result: Ok(n),
+        match opAble.legacy_call() {
+            Ok(result) => Poll::Ready(CompletionMeta {
+                result: Ok(result),
                 flags: 0,
             }),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                ref_mut.clear_readiness(direction.mask());
-                ref_mut.set_waker(cx, direction);
+                scheduledIo.clearReady(directionInterest.mask());
+                scheduledIo.set_waker(context, directionInterest);
                 Poll::Pending
             }
             Err(e) => Poll::Ready(CompletionMeta {
@@ -315,7 +256,7 @@ impl LegacyInner {
     }
 
     pub(crate) fn cancel_op(
-        this: &Rc<UnsafeCell<LegacyInner>>,
+        this: &Rc<UnsafeCell<LegacyDriverInner>>,
         index: usize,
         direction: ready::Direction,
     ) {
@@ -327,38 +268,30 @@ impl LegacyInner {
         inner.dispatch(mio::Token(index), ready);
     }
 
-    pub(crate) fn submit_with_data<T>(
-        this: &Rc<UnsafeCell<LegacyInner>>,
-        data: T,
-    ) -> io::Result<Op<T>>
-    where
-        T: OpAble,
-    {
+    pub(crate) fn submitOpAble<T: OpAble>(legacyDriverInner: &Rc<UnsafeCell<LegacyDriverInner>>, opAble: T) -> io::Result<Op<T>> {
         Ok(Op {
-            driver: Inner::Legacy(this.clone()),
+            driver: Inner::Legacy(legacyDriverInner.clone()),
             // useless for legacy
             index: 0,
-            data: Some(data),
+            opAble: Some(opAble),
         })
     }
 
     #[cfg(feature = "sync")]
-    pub(crate) fn unpark(this: &Rc<UnsafeCell<LegacyInner>>) -> waker::UnparkHandle {
+    pub(crate) fn getLegacyUnpark(this: &Rc<UnsafeCell<LegacyDriverInner>>) -> LegacyUnpark {
         let inner = unsafe { &*this.get() };
-        let weak = std::sync::Arc::downgrade(&inner.shared_waker);
-        waker::UnparkHandle(weak)
+        LegacyUnpark(Arc::downgrade(&inner.mioWakerWrapper))
     }
 }
 
 impl Driver for LegacyDriver {
     fn with<R>(&self, f: impl FnOnce() -> R) -> R {
-        let inner = Inner::Legacy(self.inner.clone());
-        CURRENT.set(&inner, f)
+        let inner = Inner::Legacy(self.legacyDriverInner.clone());
+        CURRENT_INNER.set(&inner, f)
     }
 
     fn submit(&self) -> io::Result<()> {
-        // wait with timeout = 0
-        self.park_timeout(Duration::ZERO)
+        self.inner_park(Some(Duration::ZERO))
     }
 
     fn park(&self) -> io::Result<()> {
@@ -370,11 +303,11 @@ impl Driver for LegacyDriver {
     }
 
     #[cfg(feature = "sync")]
-    type Unpark = waker::UnparkHandle;
+    type Unpark = LegacyUnpark;
 
     #[cfg(feature = "sync")]
-    fn unpark(&self) -> Self::Unpark {
-        LegacyInner::unpark(&self.inner)
+    fn getUnpark(&self) -> Self::Unpark {
+        LegacyDriverInner::getLegacyUnpark(&self.legacyDriverInner)
     }
 }
 
@@ -384,8 +317,8 @@ impl Drop for LegacyDriver {
         #[cfg(feature = "sync")]
         {
             use crate::driver::thread::{unregister_unpark_handle, unregister_waker_sender};
-            unregister_unpark_handle(self.thread_id);
-            unregister_waker_sender(self.thread_id);
+            unregister_unpark_handle(self.threadId);
+            unregister_waker_sender(self.threadId);
         }
     }
 }

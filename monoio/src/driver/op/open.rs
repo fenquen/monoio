@@ -2,14 +2,10 @@ use std::{ffi::CString, io, path::Path};
 
 #[cfg(all(target_os = "linux", feature = "iouring"))]
 use io_uring::{opcode, types};
-#[cfg(windows)]
-use windows_sys::Win32::{Foundation::INVALID_HANDLE_VALUE, Storage::FileSystem::CreateFileW};
 
 use super::{Op, OpAble};
 #[cfg(any(feature = "legacy", feature = "poll-io"))]
 use crate::driver::ready::Direction;
-#[cfg(windows)]
-use crate::syscall;
 #[cfg(all(unix, any(feature = "legacy", feature = "poll-io")))]
 use crate::syscall_u32;
 use crate::{driver::util::cstr, fs::OpenOptions};
@@ -21,8 +17,6 @@ pub(crate) struct Open {
     flags: i32,
     #[cfg(unix)]
     mode: libc::mode_t,
-    #[cfg(windows)]
-    opts: OpenOptions,
 }
 
 impl Op<Open> {
@@ -38,18 +32,6 @@ impl Op<Open> {
         let mode = options.mode;
 
         Op::submit_with(Open { path, flags, mode })
-    }
-
-    #[cfg(windows)]
-    /// Submit a request to open a file.
-    pub(crate) fn open<P: AsRef<Path>>(path: P, options: &OpenOptions) -> io::Result<Op<Open>> {
-        // Here the path will be copied, so its safe.
-        let path = cstr(path.as_ref())?;
-
-        Op::submit_with(Open {
-            path,
-            opts: options.clone(),
-        })
     }
 }
 

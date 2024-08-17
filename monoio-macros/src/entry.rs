@@ -298,7 +298,7 @@ fn parse_knobs(mut input: syn::ItemFn, is_test: bool, config: FinalConfig) -> To
                     .block_on(body)#tail_semicolon
             }
         })
-        .expect("Parsing failure");
+            .expect("Parsing failure");
     } else {
         // Check covered when building config.
         debug_assert!(matches!(input.sig.output, syn::ReturnType::Default));
@@ -337,7 +337,7 @@ fn parse_knobs(mut input: syn::ItemFn, is_test: bool, config: FinalConfig) -> To
                 });
             }
         })
-        .expect("Parsing failure");
+            .expect("Parsing failure");
     }
 
     input.block.brace_token = brace_token;
@@ -436,18 +436,15 @@ pub(crate) fn test_all(args: TokenStream, item: TokenStream) -> TokenStream {
         Ok(it) => it,
         Err(e) => return token_stream_with_error(item, e),
     };
-    let config = if let Some(attr) = input
-        .attrs
-        .iter()
-        .find(|attr| attr.meta.path().is_ident("test"))
-    {
-        let msg = "second test attribute is supplied";
-        Err(syn::Error::new_spanned(attr, msg))
-    } else {
-        AttributeArgs::parse_terminated
-            .parse(args)
-            .and_then(|args| build_config(input.clone(), args))
-    };
+
+    let config =
+        if let Some(attr) = input.attrs.iter().find(|attr| attr.meta.path().is_ident("test")) {
+            let msg = "second test attribute is supplied";
+            Err(syn::Error::new_spanned(attr, msg))
+        } else {
+            AttributeArgs::parse_terminated.parse(args).and_then(|args| build_config(input.clone(), args))
+        };
+
     let mut config = match config {
         Ok(config) => config,
         Err(e) => {
@@ -458,19 +455,13 @@ pub(crate) fn test_all(args: TokenStream, item: TokenStream) -> TokenStream {
     let mut output = TokenStream::new();
 
     let mut input_uring = input.clone();
-    input_uring.sig.ident = proc_macro2::Ident::new(
-        &format!("uring_{}", input_uring.sig.ident),
-        input_uring.sig.ident.span(),
-    );
+    input_uring.sig.ident = proc_macro2::Ident::new(&format!("uring_{}", input_uring.sig.ident), input_uring.sig.ident.span(), );
     config.driver = DriverType::Uring;
     let token_uring = parse_knobs(input_uring, true, config);
     output.extend(token_uring);
 
     let mut input_legacy = input;
-    input_legacy.sig.ident = proc_macro2::Ident::new(
-        &format!("legacy_{}", input_legacy.sig.ident),
-        input_legacy.sig.ident.span(),
-    );
+    input_legacy.sig.ident = proc_macro2::Ident::new(&format!("legacy_{}", input_legacy.sig.ident), input_legacy.sig.ident.span(), );
     config.driver = DriverType::Legacy;
     let token_legacy = parse_knobs(input_legacy, true, config);
     output.extend(token_legacy);

@@ -72,10 +72,7 @@ pub struct Then<St, F> {
     f: F,
 }
 
-impl<St, F> Then<St, F>
-where
-    St: Stream,
-{
+impl<St: Stream, F> Then<St, F> {
     pub(super) fn new(stream: St, f: F) -> Self {
         Self { stream, f }
     }

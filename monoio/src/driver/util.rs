@@ -7,15 +7,6 @@ pub(super) fn cstr(p: &Path) -> io::Result<CString> {
         use std::os::unix::ffi::OsStrExt;
         Ok(CString::new(p.as_os_str().as_bytes())?)
     }
-    #[cfg(windows)]
-    if let Some(s) = p.as_os_str().to_str() {
-        Ok(CString::new(s)?)
-    } else {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "invalid utf-8: corrupt contents",
-        ))
-    }
 }
 
 // Convert Duration to Timespec
@@ -37,20 +28,6 @@ macro_rules! syscall {
             Err(std::io::Error::last_os_error())
         } else {
             Ok(res)
-        }
-    }};
-}
-
-/// Do syscall and return Result<T, std::io::Error>
-#[cfg(windows)]
-#[macro_export]
-macro_rules! syscall {
-    ($fn: ident ( $($arg: expr),* $(,)* ), $err_test: path, $err_value: expr) => {{
-        let res = unsafe { $fn($($arg, )*) };
-        if $err_test(&res, &$err_value) {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(res.try_into().unwrap())
         }
     }};
 }

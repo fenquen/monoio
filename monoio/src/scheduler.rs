@@ -5,18 +5,18 @@ use crate::task::{Schedule, Task};
 pub(crate) struct LocalScheduler;
 
 impl Schedule for LocalScheduler {
-    fn schedule(&self, task: Task<Self>) {
-        crate::runtime::CURRENT.with(|cx| cx.tasks.push(task));
+    fn schedule(&self, task: Task<LocalScheduler>) {
+        crate::runtime::CURRENT_CONTEXT.with(|context| context.taskQueue.push(task));
     }
 
-    fn yield_now(&self, task: Task<Self>) {
-        crate::runtime::CURRENT.with(|cx| cx.tasks.push_front(task));
+    fn yield_now(&self, task: Task<LocalScheduler>) {
+        crate::runtime::CURRENT_CONTEXT.with(|context| context.taskQueue.push_front(task));
     }
 }
 
 pub(crate) struct TaskQueue {
-    // Local queue.
     queue: UnsafeCell<VecDeque<Task<LocalScheduler>>>,
+
     // Make sure the type is `!Send` and `!Sync`.
     _marker: PhantomData<*const ()>,
 }
@@ -41,6 +41,7 @@ impl TaskQueue {
         const DEFAULT_TASK_QUEUE_SIZE: usize = 4096;
         Self::new_with_capacity(DEFAULT_TASK_QUEUE_SIZE)
     }
+
     pub(crate) fn new_with_capacity(capacity: usize) -> Self {
         Self {
             queue: UnsafeCell::new(VecDeque::with_capacity(capacity)),
@@ -57,15 +58,11 @@ impl TaskQueue {
     }
 
     pub(crate) fn push(&self, runnable: Task<LocalScheduler>) {
-        unsafe {
-            (*self.queue.get()).push_back(runnable);
-        }
+        unsafe { (*self.queue.get()).push_back(runnable); }
     }
 
     pub(crate) fn push_front(&self, runnable: Task<LocalScheduler>) {
-        unsafe {
-            (*self.queue.get()).push_front(runnable);
-        }
+        unsafe { (*self.queue.get()).push_front(runnable); }
     }
 
     pub(crate) fn pop(&self) -> Option<Task<LocalScheduler>> {

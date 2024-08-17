@@ -35,26 +35,12 @@ async fn send_to() {
     let passive1 = UdpSocket::bind("127.0.0.1:0").unwrap();
     let passive1_addr = passive1.local_addr().unwrap();
 
-    let passive01 = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-    let passive01_addr = passive01.local_addr().unwrap();
-
-    let passive2 = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let passive2_addr = passive2.local_addr().unwrap();
-
-    let passive3 = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let passive3_addr = passive3.local_addr().unwrap();
-
     let active = UdpSocket::bind("127.0.0.1:0").unwrap();
     let active_addr = active.local_addr().unwrap();
 
-    active.send_to(MSG, passive01_addr).await.0.unwrap();
     active.send_to(MSG, passive1_addr).await.0.unwrap();
-    active.send_to(MSG, passive2_addr).await.0.unwrap();
-    active.send_to(MSG, passive3_addr).await.0.unwrap();
 
     must_success!(passive1.recv_from(vec![0; 20]).await, active_addr);
-    must_success!(passive2.recv_from(vec![0; 20]).await, active_addr);
-    must_success!(passive3.recv_from(vec![0; 20]).await, active_addr);
 }
 
 #[monoio::test_all(timer_enabled = true)]

@@ -13,17 +13,6 @@ pub use listener_config::ListenerOpts as ListenerConfig;
 pub use tcp::{TcpConnectOpts, TcpListener, TcpStream};
 #[cfg(unix)]
 pub use unix::{Pipe, UnixDatagram, UnixListener, UnixStream};
-#[cfg(windows)]
-use {
-    std::os::windows::prelude::RawSocket,
-    windows_sys::Win32::{
-        Foundation::NO_ERROR,
-        Networking::WinSock::{
-            closesocket, ioctlsocket, socket, WSACleanup, WSAStartup, ADDRESS_FAMILY, FIONBIO,
-            INVALID_SOCKET, WINSOCK_SOCKET_TYPE,
-        },
-    },
-};
 
 // Copied from mio.
 #[cfg(unix)]
@@ -86,43 +75,4 @@ pub(crate) fn new_socket(
     });
 
     socket
-}
-
-#[allow(non_snake_case, missing_docs)]
-#[cfg(windows)]
-#[inline]
-pub fn MAKEWORD(a: u8, b: u8) -> u16 {
-    (a as u16) | ((b as u16) << 8)
-}
-
-#[cfg(windows)]
-pub(crate) fn new_socket(
-    domain: ADDRESS_FAMILY,
-    socket_type: WINSOCK_SOCKET_TYPE,
-) -> std::io::Result<RawSocket> {
-    let _: i32 = crate::syscall!(
-        WSAStartup(MAKEWORD(2, 2), std::ptr::null_mut()),
-        PartialEq::eq,
-        NO_ERROR as _
-    )?;
-    let socket = crate::syscall!(
-        socket(domain as _, socket_type, 0),
-        PartialEq::eq,
-        INVALID_SOCKET
-    )?;
-    crate::syscall!(
-        ioctlsocket(socket, FIONBIO, &mut 1),
-        PartialEq::ne,
-        NO_ERROR as _
-    )
-    .map(|_: i32| socket as RawSocket)
-    .map_err(|e| {
-        // If either of the `ioctlsocket` calls failed, ensure the socket is
-        // closed and return the error.
-        unsafe {
-            closesocket(socket);
-            WSACleanup();
-        }
-        e
-    })
 }

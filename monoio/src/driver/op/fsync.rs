@@ -2,11 +2,6 @@ use std::io;
 
 #[cfg(all(target_os = "linux", feature = "iouring"))]
 use io_uring::{opcode, types};
-#[cfg(windows)]
-use {
-    crate::syscall, std::os::windows::prelude::AsRawHandle,
-    windows_sys::Win32::Storage::FileSystem::FlushFileBuffers,
-};
 
 use super::{super::shared_fd::SharedFd, Op, OpAble};
 #[cfg(any(feature = "legacy", feature = "poll-io"))]

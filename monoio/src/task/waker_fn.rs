@@ -1,30 +1,26 @@
 use core::task::{RawWaker, RawWakerVTable, Waker};
 use std::cell::Cell;
+use std::ptr;
 
-/// Creates a waker that does nothing.
+/// create a waker that does nothing.
 ///
-/// This `Waker` is useful for polling a `Future` to check whether it is
-/// `Ready`, without doing any additional work.
-pub(crate) fn dummy_waker() -> Waker {
-    fn raw_waker() -> RawWaker {
-        // the pointer is never dereferenced, so null is ok
-        RawWaker::new(std::ptr::null::<()>(), vtable())
+/// this `Waker` is useful for polling a `Future` to check whether it is `Ready`, without doing any additional work.
+pub(crate) fn buildDummyWaker() -> Waker {
+    fn buildDummyRawWaker() -> RawWaker {
+        // the pointer is never used, so null is ok
+        RawWaker::new(ptr::null::<()>(), buildDummyRawWakerVTable())
     }
 
-    fn vtable() -> &'static RawWakerVTable {
+    fn buildDummyRawWakerVTable() -> &'static RawWakerVTable {
         &RawWakerVTable::new(
-            |_| raw_waker(),
-            |_| {
-                set_poll();
-            },
-            |_| {
-                set_poll();
-            },
+            |_| buildDummyRawWaker(),
+            |_| setShouldPoll(),
+            |_| setShouldPoll(),
             |_| {},
         )
     }
 
-    unsafe { Waker::from_raw(raw_waker()) }
+    unsafe { Waker::from_raw(buildDummyRawWaker()) }
 }
 
 #[cfg(feature = "unstable")]
@@ -37,11 +33,11 @@ thread_local! {
 }
 
 #[inline]
-pub(crate) fn should_poll() -> bool {
+pub(crate) fn readShouldPoll() -> bool {
     SHOULD_POLL.replace(false)
 }
 
 #[inline]
-pub(crate) fn set_poll() {
+pub(crate) fn setShouldPoll() {
     SHOULD_POLL.set(true);
 }

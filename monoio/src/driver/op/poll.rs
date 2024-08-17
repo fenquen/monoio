@@ -1,16 +1,7 @@
 use std::io;
-#[cfg(windows)]
-use std::{
-    io::{Error, ErrorKind},
-    os::windows::prelude::AsRawSocket,
-};
 
 #[cfg(all(target_os = "linux", feature = "iouring"))]
 use io_uring::{opcode, types};
-#[cfg(windows)]
-use windows_sys::Win32::Networking::WinSock::{
-    WSAGetLastError, WSAPoll, POLLIN, POLLOUT, SOCKET_ERROR, WSAPOLLFD,
-};
 
 use super::{super::shared_fd::SharedFd, Op, OpAble};
 #[cfg(any(feature = "legacy", feature = "poll-io"))]

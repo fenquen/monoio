@@ -3,8 +3,6 @@
 use std::io::prelude::*;
 #[cfg(unix)]
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
-#[cfg(windows)]
-use std::os::windows::io::{AsRawHandle, FromRawHandle, RawHandle as RawFd};
 
 use monoio::fs::File;
 use tempfile::NamedTempFile;
@@ -130,8 +128,7 @@ fn drop_off_runtime() {
 
     #[cfg(unix)]
     let fd = file.as_raw_fd();
-    #[cfg(windows)]
-    let fd = file.as_raw_handle();
+
     drop(file);
 
     assert_invalid_fd(fd, tempfile.as_file().metadata().unwrap());
@@ -171,8 +168,6 @@ fn assert_invalid_fd(fd: RawFd, base: std::fs::Metadata) {
     use std::fs::File;
     #[cfg(unix)]
     let f = unsafe { File::from_raw_fd(fd) };
-    #[cfg(windows)]
-    let f = unsafe { File::from_raw_handle(fd) };
 
     let meta = f.metadata();
     std::mem::forget(f);

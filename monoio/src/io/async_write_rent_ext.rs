@@ -1,12 +1,10 @@
 use std::future::Future;
-
 use crate::{
     buf::{IoBuf, IoVecBuf, Slice},
     io::AsyncWriteRent,
     BufResult,
 };
 
-/// AsyncWriteRentExt
 pub trait AsyncWriteRentExt {
     /// Write all
     fn write_all<T: IoBuf + 'static>(

@@ -342,8 +342,8 @@ where
     }
 
     #[cfg(feature = "sync")]
-    fn unpark(&self) -> Self::Unpark {
-        self.park.unpark()
+    fn getUnpark(&self) -> Self::Unpark {
+        self.park.getUnpark()
     }
 }
 

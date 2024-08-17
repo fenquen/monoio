@@ -2,9 +2,7 @@
 
 fn main() {
     // 1. Create runtime and block_on normally
-    let mut rt = monoio::RuntimeBuilder::<monoio::FusionDriver>::new()
-        .build()
-        .unwrap();
+    let mut rt = monoio::RuntimeBuilder::<monoio::FusionDriver>::new().build().unwrap();
     rt.block_on(async {
         println!("it works1!");
     });
@@ -24,6 +22,7 @@ fn main() {
     monoio::start::<monoio::IoUringDriver, _>(async {
         println!("it works3!");
     });
+
     #[cfg(not(target_os = "linux"))]
     monoio::start::<monoio::LegacyDriver, _>(async {
         println!("it works3!");

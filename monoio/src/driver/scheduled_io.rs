@@ -3,12 +3,13 @@ use std::task::{Context, Poll, Waker};
 use super::ready::{Direction, Ready};
 
 pub(crate) struct ScheduledIo {
-    readiness: Ready,
+    ready: Ready,
 
     /// Waker used for AsyncRead.
-    reader: Option<Waker>,
+    readWaker: Option<Waker>,
+
     /// Waker used for AsyncWrite.
-    writer: Option<Waker>,
+    writeWaker: Option<Waker>,
 }
 
 impl Default for ScheduledIo {
@@ -21,63 +22,63 @@ impl Default for ScheduledIo {
 impl ScheduledIo {
     pub(crate) const fn new() -> Self {
         Self {
-            readiness: Ready::EMPTY,
-            reader: None,
-            writer: None,
+            ready: Ready::EMPTY,
+            readWaker: None,
+            writeWaker: None,
         }
     }
 
     #[allow(unused)]
     #[inline]
     pub(crate) fn set_writable(&mut self) {
-        self.readiness |= Ready::WRITABLE;
+        self.ready |= Ready::WRITABLE;
     }
 
     #[inline]
-    pub(crate) fn set_readiness(&mut self, f: impl Fn(Ready) -> Ready) {
-        self.readiness = f(self.readiness);
+    pub(crate) fn setReady(&mut self, f: impl Fn(Ready) -> Ready) {
+        self.ready = f(self.ready);
     }
 
     #[inline]
     pub(crate) fn wake(&mut self, ready: Ready) {
         if ready.is_readable() {
-            if let Some(waker) = self.reader.take() {
+            if let Some(waker) = self.readWaker.take() {
                 waker.wake();
             }
         }
+
         if ready.is_writable() {
-            if let Some(waker) = self.writer.take() {
+            if let Some(waker) = self.writeWaker.take() {
                 waker.wake();
             }
         }
     }
 
     #[inline]
-    pub(crate) fn clear_readiness(&mut self, ready: Ready) {
-        self.readiness = self.readiness - ready;
+    pub(crate) fn clearReady(&mut self, ready: Ready) {
+        self.ready = self.ready - ready;
     }
 
-    #[allow(clippy::needless_pass_by_ref_mut)]
-    #[inline]
-    pub(crate) fn poll_readiness(
-        &mut self,
-        cx: &mut Context<'_>,
-        direction: Direction,
-    ) -> Poll<Ready> {
-        let ready = direction.mask() & self.readiness;
+    /// 要是当前的io还不是想要的话,设置相应的waker,等到有了想要的时候调用waker.wake()
+    pub(crate) fn isReady(&mut self,
+                          cx: &mut Context<'_>,
+                          direction: Direction) -> Poll<Ready> {
+        let ready = direction.mask() & self.ready;
         if !ready.is_empty() {
             return Poll::Ready(ready);
         }
+
         self.set_waker(cx, direction);
+
         Poll::Pending
     }
 
-    #[inline]
     pub(crate) fn set_waker(&mut self, cx: &mut Context<'_>, direction: Direction) {
         let slot = match direction {
-            Direction::Read => &mut self.reader,
-            Direction::Write => &mut self.writer,
+            Direction::Read => &mut self.readWaker,
+            Direction::Write => &mut self.writeWaker,
         };
+
         match slot {
             Some(existing) => {
                 if !existing.will_wake(cx.waker()) {

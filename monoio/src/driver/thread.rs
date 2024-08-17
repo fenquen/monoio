@@ -9,40 +9,37 @@ use once_cell::sync::Lazy as LazyLock;
 
 use crate::driver::UnparkHandle;
 
-static UNPARK: LazyLock<Mutex<FxHashMap<usize, UnparkHandle>>> =
-    LazyLock::new(|| Mutex::new(FxHashMap::default()));
-
-// Global waker sender map
-static WAKER_SENDER: LazyLock<Mutex<FxHashMap<usize, Sender<Waker>>>> =
-    LazyLock::new(|| Mutex::new(FxHashMap::default()));
-
 macro_rules! lock {
     ($x: ident) => {
-        $x.lock()
-            .expect("Unable to lock global map, which is unexpected")
+        $x.lock().expect("Unable to lock global map, which is unexpected")
     };
 }
 
-pub(crate) fn register_unpark_handle(id: usize, unpark: UnparkHandle) {
-    lock!(UNPARK).insert(id, unpark);
+static UNPARK: LazyLock<Mutex<FxHashMap<usize, UnparkHandle>>> = LazyLock::new(|| Mutex::new(FxHashMap::default()));
+
+pub(crate) fn register_unpark_handle(threadId: usize, unpark: UnparkHandle) {
+    lock!(UNPARK).insert(threadId, unpark);
 }
 
-pub(crate) fn unregister_unpark_handle(id: usize) {
-    lock!(UNPARK).remove(&id);
+pub(crate) fn unregister_unpark_handle(threadId: usize) {
+    lock!(UNPARK).remove(&threadId);
 }
 
-pub(crate) fn get_unpark_handle(id: usize) -> Option<UnparkHandle> {
-    lock!(UNPARK).get(&id).cloned()
+pub(crate) fn get_unpark_handle(threadId: usize) -> Option<UnparkHandle> {
+    lock!(UNPARK).get(&threadId).cloned()
 }
 
-pub(crate) fn register_waker_sender(id: usize, sender: Sender<Waker>) {
-    lock!(WAKER_SENDER).insert(id, sender);
+// Global waker sender map
+static WAKER_SENDER: LazyLock<Mutex<FxHashMap<usize, Sender<Waker>>>> = LazyLock::new(|| Mutex::new(FxHashMap::default()));
+
+pub(crate) fn register_waker_sender(threadId: usize, sender: Sender<Waker>) {
+    lock!(WAKER_SENDER).insert(threadId, sender);
 }
 
-pub(crate) fn unregister_waker_sender(id: usize) {
-    lock!(WAKER_SENDER).remove(&id);
+pub(crate) fn unregister_waker_sender(threadId: usize) {
+    lock!(WAKER_SENDER).remove(&threadId);
 }
 
-pub(crate) fn get_waker_sender(id: usize) -> Option<Sender<Waker>> {
-    lock!(WAKER_SENDER).get(&id).cloned()
+pub(crate) fn get_waker_sender(threadId: usize) -> Option<Sender<Waker>> {
+    lock!(WAKER_SENDER).get(&threadId).cloned()
 }

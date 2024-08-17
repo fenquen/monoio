@@ -7,11 +7,6 @@ use {
     libc::{shutdown, SHUT_WR},
     std::os::fd::AsRawFd,
 };
-#[cfg(windows)]
-use {
-    std::os::windows::io::AsRawSocket,
-    windows_sys::Win32::Networking::WinSock::{shutdown, SD_SEND as SHUT_WR},
-};
 
 use super::TcpStream;
 use crate::driver::op::Op;
@@ -114,8 +109,6 @@ impl tokio::io::AsyncWrite for TcpStreamPoll {
     ) -> std::task::Poll<Result<(), io::Error>> {
         #[cfg(unix)]
         let fd = self.0.as_raw_fd();
-        #[cfg(windows)]
-        let fd = self.0.as_raw_socket() as _;
         let res = match unsafe { shutdown(fd, SHUT_WR) } {
             -1 => Err(io::Error::last_os_error()),
             _ => Ok(()),
@@ -186,12 +179,5 @@ impl AsRawFd for TcpStreamPoll {
     #[inline]
     fn as_raw_fd(&self) -> std::os::unix::io::RawFd {
         self.0.as_raw_fd()
-    }
-}
-
-#[cfg(windows)]
-impl AsRawSocket for TcpStreamPoll {
-    fn as_raw_socket(&self) -> std::os::windows::io::RawSocket {
-        self.0.as_raw_socket()
     }
 }

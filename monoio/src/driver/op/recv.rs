@@ -149,13 +149,6 @@ impl<T: IoBufMut> Op<RecvMsg<T>> {
             info.2.msg_name = &mut info.0 as *mut _ as *mut libc::c_void;
             info.2.msg_namelen = std::mem::size_of::<sockaddr_storage>() as socklen_t;
         }
-        #[cfg(windows)]
-        {
-            info.2.lpBuffers = info.1.write_wsabuf_ptr();
-            info.2.dwBufferCount = info.1.write_wsabuf_len() as _;
-            info.2.name = &mut info.0 as *mut _ as *mut SOCKADDR;
-            info.2.namelen = std::mem::size_of::<sockaddr_storage>() as _;
-        }
 
         Op::submit_with(RecvMsg { fd, buf, info })
     }
@@ -176,8 +169,6 @@ impl<T: IoBufMut> Op<RecvMsg<T>> {
                         let addr: &sockaddr_in = transmute(&storage);
                         #[cfg(unix)]
                         let ip = Ipv4Addr::from(addr.sin_addr.s_addr.to_ne_bytes());
-                        #[cfg(windows)]
-                        let ip = Ipv4Addr::from(addr.sin_addr.S_un.S_addr.to_ne_bytes());
                         let port = u16::from_be(addr.sin_port);
                         SocketAddr::V4(SocketAddrV4::new(ip, port))
                     }
@@ -187,13 +178,9 @@ impl<T: IoBufMut> Op<RecvMsg<T>> {
                         let addr: &sockaddr_in6 = transmute(&storage);
                         #[cfg(unix)]
                         let ip = Ipv6Addr::from(addr.sin6_addr.s6_addr);
-                        #[cfg(windows)]
-                        let ip = Ipv6Addr::from(addr.sin6_addr.u.Byte);
                         let port = u16::from_be(addr.sin6_port);
                         #[cfg(unix)]
                         let scope_id = addr.sin6_scope_id;
-                        #[cfg(windows)]
-                        let scope_id = addr.Anonymous.sin6_scope_id;
                         SocketAddr::V6(SocketAddrV6::new(ip, port, addr.sin6_flowinfo, scope_id))
                     }
                     _ => {

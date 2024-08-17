@@ -2,8 +2,6 @@
 
 #[cfg(unix)]
 use std::os::unix::prelude::{AsRawFd, FromRawFd, IntoRawFd};
-#[cfg(windows)]
-use std::os::windows::prelude::{AsRawSocket, FromRawSocket, IntoRawSocket, RawSocket};
 use std::{
     io,
     net::{SocketAddr, ToSocketAddrs},
@@ -26,20 +24,20 @@ use crate::{
 /// [`send`] and [`recv`].
 #[derive(Debug)]
 pub struct UdpSocket {
-    fd: SharedFd,
+    sharedFd: SharedFd,
 }
 
 /// UdpSocket is safe to split to two parts
 unsafe impl Split for UdpSocket {}
 
 impl UdpSocket {
-    pub(crate) fn from_shared_fd(fd: SharedFd) -> Self {
-        Self { fd }
+    pub(crate) fn from_shared_fd(sharedFd: SharedFd) -> Self {
+        Self { sharedFd }
     }
 
     #[cfg(feature = "legacy")]
     fn set_non_blocking(_socket: &socket2::Socket) -> io::Result<()> {
-        crate::driver::CURRENT.with(|x| match x {
+        crate::driver::CURRENT_INNER.with(|x| match x {
             // TODO: windows ioring support
             #[cfg(all(target_os = "linux", feature = "iouring"))]
             crate::driver::Inner::Uring(_) => Ok(()),
@@ -48,77 +46,61 @@ impl UdpSocket {
     }
 
     /// Creates a UDP socket from the given address.
-    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<Self> {
-        let addr = addr
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "empty address"))?;
+    pub fn bind<A: ToSocketAddrs>(addr: A) -> io::Result<UdpSocket> {
+        let addr = addr.to_socket_addrs()?.next().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "empty address"))?;
+
         let domain = if addr.is_ipv6() {
             socket2::Domain::IPV6
         } else {
             socket2::Domain::IPV4
         };
-        let socket =
-            socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
+
+        let socket = socket2::Socket::new(domain, socket2::Type::DGRAM, Some(socket2::Protocol::UDP))?;
+
         #[cfg(feature = "legacy")]
         Self::set_non_blocking(&socket)?;
 
-        let addr = socket2::SockAddr::from(addr);
-        socket.bind(&addr)?;
+        let socketAddr = socket2::SockAddr::from(addr);
+        socket.bind(&socketAddr)?;
 
         #[cfg(unix)]
-        let fd = socket.into_raw_fd();
-        #[cfg(windows)]
-        let fd = socket.into_raw_socket();
+        let rawFd = socket.into_raw_fd();
 
-        Ok(Self::from_shared_fd(SharedFd::new::<false>(fd)?))
+        Ok(UdpSocket::from_shared_fd(SharedFd::new::<false>(rawFd)?))
     }
 
     /// Receives a single datagram message on the socket. On success, returns the number
     /// of bytes read and the origin.
     pub async fn recv_from<T: IoBufMut>(&self, buf: T) -> crate::BufResult<(usize, SocketAddr), T> {
-        let op = Op::recv_msg(self.fd.clone(), buf).unwrap();
+        let op = Op::recv_msg(self.sharedFd.clone(), buf).unwrap();
         op.wait().await
     }
 
     /// Sends data on the socket to the given address. On success, returns the
     /// number of bytes written.
-    pub async fn send_to<T: IoBuf>(
-        &self,
-        buf: T,
-        socket_addr: SocketAddr,
-    ) -> crate::BufResult<usize, T> {
-        let op = Op::send_msg(self.fd.clone(), buf, Some(socket_addr)).unwrap();
-        op.wait().await
+    pub async fn send_to<T: IoBuf>(&self,
+                                   buf: T,
+                                   socket_addr: SocketAddr) -> crate::BufResult<usize, T> {
+         Op::send_msg(self.sharedFd.clone(), buf, Some(socket_addr)).unwrap().wait().await
     }
 
     /// Returns the socket address of the remote peer this socket was connected to.
     pub fn peer_addr(&self) -> io::Result<SocketAddr> {
         #[cfg(unix)]
-        let socket = unsafe { socket2::Socket::from_raw_fd(self.fd.as_raw_fd()) };
-        #[cfg(windows)]
-        let socket = unsafe { socket2::Socket::from_raw_socket(self.fd.as_raw_socket()) };
+        let socket = unsafe { socket2::Socket::from_raw_fd(self.sharedFd.as_raw_fd()) };
         let addr = socket.peer_addr();
         #[cfg(unix)]
         socket.into_raw_fd();
-        #[cfg(windows)]
-        socket.into_raw_socket();
-        addr?
-            .as_socket()
-            .ok_or_else(|| io::ErrorKind::InvalidInput.into())
+        addr?.as_socket().ok_or_else(|| io::ErrorKind::InvalidInput.into())
     }
 
     /// Returns the socket address that this socket was created from.
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         #[cfg(unix)]
-        let socket = unsafe { socket2::Socket::from_raw_fd(self.fd.as_raw_fd()) };
-        #[cfg(windows)]
-        let socket = unsafe { socket2::Socket::from_raw_socket(self.fd.as_raw_socket()) };
+        let socket = unsafe { socket2::Socket::from_raw_fd(self.sharedFd.as_raw_fd()) };
         let addr = socket.local_addr();
         #[cfg(unix)]
         socket.into_raw_fd();
-        #[cfg(windows)]
-        socket.into_raw_socket();
         addr?
             .as_socket()
             .ok_or_else(|| io::ErrorKind::InvalidInput.into())
@@ -128,7 +110,7 @@ impl UdpSocket {
     /// `recv` syscalls to be used to send data and also applies filters to only
     /// receive data from the specified address.
     pub async fn connect(&self, socket_addr: SocketAddr) -> io::Result<()> {
-        let op = Op::connect(self.fd.clone(), socket_addr, false)?;
+        let op = Op::connect(self.sharedFd.clone(), socket_addr, false)?;
         let completion = op.await;
         completion.meta.result?;
         Ok(())
@@ -136,14 +118,14 @@ impl UdpSocket {
 
     /// Sends data on the socket to the remote address to which it is connected.
     pub async fn send<T: IoBuf>(&self, buf: T) -> crate::BufResult<usize, T> {
-        let op = Op::send_msg(self.fd.clone(), buf, None).unwrap();
+        let op = Op::send_msg(self.sharedFd.clone(), buf, None).unwrap();
         op.wait().await
     }
 
     /// Receives a single datagram message on the socket from the remote address to
     /// which it is connected. On success, returns the number of bytes read.
     pub async fn recv<T: IoBufMut>(&self, buf: T) -> crate::BufResult<usize, T> {
-        let op = Op::recv(self.fd.clone(), buf).unwrap();
+        let op = Op::recv(self.sharedFd.clone(), buf).unwrap();
         op.read().await
     }
 
@@ -151,14 +133,10 @@ impl UdpSocket {
     pub fn from_std(socket: std::net::UdpSocket) -> io::Result<Self> {
         #[cfg(unix)]
         let fd = socket.as_raw_fd();
-        #[cfg(windows)]
-        let fd = socket.as_raw_socket();
         match SharedFd::new::<false>(fd) {
             Ok(shared) => {
                 #[cfg(unix)]
                 socket.into_raw_fd();
-                #[cfg(windows)]
-                socket.into_raw_socket();
                 Ok(Self::from_shared_fd(shared))
             }
             Err(e) => Err(e),
@@ -170,17 +148,12 @@ impl UdpSocket {
     pub fn set_reuse_address(&self, reuse: bool) -> io::Result<()> {
         #[cfg(unix)]
         let r = {
-            let socket = unsafe { socket2::Socket::from_raw_fd(self.fd.as_raw_fd()) };
+            let socket = unsafe { socket2::Socket::from_raw_fd(self.sharedFd.as_raw_fd()) };
             let r = socket.set_reuse_address(reuse);
             socket.into_raw_fd();
             r
         };
-        #[cfg(windows)]
-        let r = {
-            let socket = unsafe { socket2::Socket::from_raw_socket(self.fd.as_raw_socket()) };
-            socket.into_raw_socket();
-            Ok(())
-        };
+
         r
     }
 
@@ -189,17 +162,12 @@ impl UdpSocket {
     pub fn set_reuse_port(&self, reuse: bool) -> io::Result<()> {
         #[cfg(unix)]
         let r = {
-            let socket = unsafe { socket2::Socket::from_raw_fd(self.fd.as_raw_fd()) };
+            let socket = unsafe { socket2::Socket::from_raw_fd(self.sharedFd.as_raw_fd()) };
             let r = socket.set_reuse_port(reuse);
             socket.into_raw_fd();
             r
         };
-        #[cfg(windows)]
-        let r = {
-            let socket = unsafe { socket2::Socket::from_raw_socket(self.fd.as_raw_socket()) };
-            socket.into_raw_socket();
-            Ok(())
-        };
+
         r
     }
 
@@ -214,7 +182,7 @@ impl UdpSocket {
     /// If you want to do io by your own, you must maintain io readiness and wait
     /// for io ready with relaxed=false.
     pub async fn readable(&self, relaxed: bool) -> io::Result<()> {
-        let op = Op::poll_read(&self.fd, relaxed).unwrap();
+        let op = Op::poll_read(&self.sharedFd, relaxed).unwrap();
         op.wait().await
     }
 
@@ -229,7 +197,7 @@ impl UdpSocket {
     /// If you want to do io by your own, you must maintain io readiness and wait
     /// for io ready with relaxed=false.
     pub async fn writable(&self, relaxed: bool) -> io::Result<()> {
-        let op = Op::poll_write(&self.fd, relaxed).unwrap();
+        let op = Op::poll_write(&self.sharedFd, relaxed).unwrap();
         op.wait().await
     }
 }
@@ -237,14 +205,7 @@ impl UdpSocket {
 #[cfg(unix)]
 impl AsRawFd for UdpSocket {
     fn as_raw_fd(&self) -> std::os::fd::RawFd {
-        self.fd.raw_fd()
-    }
-}
-
-#[cfg(windows)]
-impl AsRawSocket for UdpSocket {
-    fn as_raw_socket(&self) -> RawSocket {
-        self.fd.raw_socket()
+        self.sharedFd.raw_fd()
     }
 }
 
@@ -261,7 +222,7 @@ impl UdpSocket {
             return (Err(operation_canceled()), buf);
         }
 
-        let op = Op::recv_msg(self.fd.clone(), buf).unwrap();
+        let op = Op::recv_msg(self.sharedFd.clone(), buf).unwrap();
         let _guard = c.associate_op(op.op_canceller());
         op.wait().await
     }
@@ -278,7 +239,7 @@ impl UdpSocket {
             return (Err(operation_canceled()), buf);
         }
 
-        let op = Op::send_msg(self.fd.clone(), buf, Some(socket_addr)).unwrap();
+        let op = Op::send_msg(self.sharedFd.clone(), buf, Some(socket_addr)).unwrap();
         let _guard = c.associate_op(op.op_canceller());
         op.wait().await
     }
@@ -293,7 +254,7 @@ impl UdpSocket {
             return (Err(operation_canceled()), buf);
         }
 
-        let op = Op::send_msg(self.fd.clone(), buf, None).unwrap();
+        let op = Op::send_msg(self.sharedFd.clone(), buf, None).unwrap();
         let _guard = c.associate_op(op.op_canceller());
         op.wait().await
     }
@@ -309,7 +270,7 @@ impl UdpSocket {
             return (Err(operation_canceled()), buf);
         }
 
-        let op = Op::recv(self.fd.clone(), buf).unwrap();
+        let op = Op::recv(self.sharedFd.clone(), buf).unwrap();
         let _guard = c.associate_op(op.op_canceller());
         op.read().await
     }

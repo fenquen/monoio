@@ -31,7 +31,7 @@ pub(crate) struct Op<T: 'static> {
     pub(super) index: usize,
 
     // Per-operation data
-    pub(super) data: Option<T>,
+    pub(super) opAble: Option<T>,
 }
 
 /// Operation completion. Returns stored state with the result of the operation.
@@ -55,6 +55,7 @@ pub(crate) trait OpAble {
 
     #[cfg(any(feature = "legacy", feature = "poll-io"))]
     fn legacy_interest(&self) -> Option<(super::ready::Direction, usize)>;
+
     #[cfg(any(feature = "legacy", feature = "poll-io"))]
     fn legacy_call(&mut self) -> io::Result<u32>;
 }
@@ -65,9 +66,10 @@ pub(crate) trait OpAble {
 #[cfg(any(feature = "legacy", feature = "poll-io"))]
 pub(crate) trait PollLegacy {
     #[cfg(feature = "legacy")]
-    fn poll_legacy(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<CompletionMeta>;
+    fn poll_legacy(&mut self, cx: &mut Context<'_>) -> Poll<CompletionMeta>;
+
     #[cfg(feature = "poll-io")]
-    fn poll_io(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<CompletionMeta>;
+    fn poll_io(&mut self, cx: &mut Context<'_>) -> Poll<CompletionMeta>;
 }
 
 #[cfg(any(feature = "legacy", feature = "poll-io"))]
@@ -89,13 +91,13 @@ where
         }
 
         #[cfg(not(all(feature = "iouring", feature = "tokio-compat")))]
-        driver::CURRENT.with(|this| this.poll_op(self, 0, _cx))
+        driver::CURRENT_INNER.with(|this| this.poll_op(self, 0, _cx))
     }
 
     #[cfg(feature = "poll-io")]
     #[inline]
-    fn poll_io(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<CompletionMeta> {
-        driver::CURRENT.with(|this| this.poll_legacy_op(self, cx))
+    fn poll_io(&mut self, cx: &mut Context<'_>) -> Poll<CompletionMeta> {
+        driver::CURRENT_INNER.with(|inner| inner.poll_legacy_op(self, cx))
     }
 }
 
@@ -104,11 +106,8 @@ impl<T> Op<T> {
     ///
     /// `state` is stored during the operation tracking any state submitted to
     /// the kernel.
-    pub(super) fn submit_with(data: T) -> io::Result<Op<T>>
-    where
-        T: OpAble,
-    {
-        driver::CURRENT.with(|this| this.submit_with(data))
+    pub(super) fn submit_with(opAble: impl OpAble) -> io::Result<Op<impl OpAble>> {
+        driver::CURRENT_INNER.with(|inner| inner.submit_with(opAble))
     }
 
     /// Try submitting an operation to uring
@@ -117,7 +116,7 @@ impl<T> Op<T> {
     where
         T: OpAble,
     {
-        if driver::CURRENT.is_set() {
+        if driver::CURRENT_INNER.is_set() {
             Op::submit_with(data)
         } else {
             Err(io::ErrorKind::Other.into())
@@ -130,7 +129,7 @@ impl<T> Op<T> {
     {
         #[cfg(feature = "legacy")]
         if is_legacy() {
-            return if let Some((dir, id)) = self.data.as_ref().unwrap().legacy_interest() {
+            return if let Some((dir, id)) = self.opAble.as_ref().unwrap().legacy_interest() {
                 OpCanceller {
                     index: id,
                     direction: Some(dir),
@@ -150,26 +149,24 @@ impl<T> Op<T> {
     }
 }
 
-impl<T> Future for Op<T>
-where
-    T: Unpin + OpAble + 'static,
-{
+impl<T: Unpin + OpAble + 'static,> Future for Op<T> {
     type Output = Completion<T>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let me = &mut *self;
-        let data_mut = me.data.as_mut().expect("unexpected operation state");
-        let meta = ready!(me.driver.poll_op::<T>(data_mut, me.index, cx));
+        let op = &mut *self;
+        let opAble = op.opAble.as_mut().expect("unexpected operation state");
 
-        me.index = usize::MAX;
-        let data = me.data.take().expect("unexpected operation state");
-        Poll::Ready(Completion { data, meta })
+        let completionMeta = ready!(op.driver.poll_op::<T>(opAble, op.index, cx));
+
+        op.index = usize::MAX;
+        let data = op.opAble.take().expect("unexpected operation state");
+        Poll::Ready(Completion { data, meta: completionMeta })
     }
 }
 
 impl<T> Drop for Op<T> {
     fn drop(&mut self) {
-        self.driver.drop_op(self.index, &mut self.data);
+        self.driver.drop_op(self.index, &mut self.opAble);
     }
 }
 
@@ -185,7 +182,7 @@ pub const fn is_legacy() -> bool {
 #[cfg(target_os = "linux")]
 #[inline]
 pub fn is_legacy() -> bool {
-    super::CURRENT.with(|inner| inner.is_legacy())
+    super::CURRENT_INNER.with(|inner| inner.is_legacy())
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Hash)]
@@ -197,6 +194,6 @@ pub(crate) struct OpCanceller {
 
 impl OpCanceller {
     pub(crate) unsafe fn cancel(&self) {
-        super::CURRENT.with(|inner| inner.cancel_op(self))
+        super::CURRENT_INNER.with(|inner| inner.cancel_op(self))
     }
 }

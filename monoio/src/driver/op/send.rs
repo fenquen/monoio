@@ -80,8 +80,8 @@ impl<T: IoBuf> OpAble for Send<T> {
             self.buf.read_ptr(),
             self.buf.bytes_init() as _,
         )
-        .flags(flags)
-        .build()
+            .flags(flags)
+            .build()
     }
 
     #[cfg(any(feature = "legacy", feature = "poll-io"))]
@@ -124,20 +124,19 @@ pub(crate) struct SendMsg<T> {
     /// Holds a strong ref to the FD, preventing the file from being closed
     /// while the operation is in-flight.
     #[allow(unused)]
-    fd: SharedFd,
+    sharedFd: SharedFd,
 
     /// Reference to the in-flight buffer.
     pub(crate) buf: T,
+
     /// For multiple message send in the future
     pub(crate) info: Box<(Option<SockAddr>, IoVecMeta, MsgMeta)>,
 }
 
 impl<T: IoBuf> Op<SendMsg<T>> {
-    pub(crate) fn send_msg(
-        fd: SharedFd,
-        buf: T,
-        socket_addr: Option<SocketAddr>,
-    ) -> io::Result<Self> {
+    pub(crate) fn send_msg(sharedFd: SharedFd,
+                           buf: T,
+                           socket_addr: Option<SocketAddr>) -> io::Result<Self> {
         let mut info: Box<(Option<SockAddr>, IoVecMeta, MsgMeta)> = Box::new((
             socket_addr.map(Into::into),
             IoVecMeta::from(&buf),
@@ -159,23 +158,8 @@ impl<T: IoBuf> Op<SendMsg<T>> {
                 }
             }
         }
-        #[cfg(windows)]
-        {
-            info.2.lpBuffers = info.1.write_wsabuf_ptr();
-            info.2.dwBufferCount = info.1.write_wsabuf_len() as _;
-            match info.0.as_ref() {
-                Some(socket_addr) => {
-                    info.2.name = socket_addr.as_ptr() as *mut _;
-                    info.2.namelen = socket_addr.len();
-                }
-                None => {
-                    info.2.name = std::ptr::null_mut();
-                    info.2.namelen = 0;
-                }
-            }
-        }
 
-        Op::submit_with(SendMsg { fd, buf, info })
+        Op::submit_with(SendMsg { sharedFd, buf, info })
     }
 
     pub(crate) async fn wait(self) -> BufResult<usize, T> {
@@ -191,7 +175,7 @@ impl<T: IoBuf> OpAble for SendMsg<T> {
     fn uring_op(&mut self) -> io_uring::squeue::Entry {
         #[allow(deprecated)]
         const FLAGS: u32 = libc::MSG_NOSIGNAL as u32;
-        opcode::SendMsg::new(types::Fd(self.fd.raw_fd()), &*self.info.2)
+        opcode::SendMsg::new(types::Fd(self.sharedFd.raw_fd()), &*self.info.2)
             .flags(FLAGS)
             .build()
     }
@@ -199,9 +183,7 @@ impl<T: IoBuf> OpAble for SendMsg<T> {
     #[cfg(any(feature = "legacy", feature = "poll-io"))]
     #[inline]
     fn legacy_interest(&self) -> Option<(Direction, usize)> {
-        self.fd
-            .registered_index()
-            .map(|idx| (Direction::Write, idx))
+        self.sharedFd.registered_index().map(|idx| (Direction::Write, idx))
     }
 
     #[cfg(all(any(feature = "legacy", feature = "poll-io"), unix))]
@@ -209,15 +191,18 @@ impl<T: IoBuf> OpAble for SendMsg<T> {
         #[cfg(target_os = "linux")]
         #[allow(deprecated)]
         const FLAGS: libc::c_int = libc::MSG_NOSIGNAL as libc::c_int;
+
         #[cfg(not(target_os = "linux"))]
         const FLAGS: libc::c_int = 0;
-        let fd = self.fd.as_raw_fd();
+
+        let fd = self.sharedFd.as_raw_fd();
+
         syscall_u32!(sendmsg(fd, &*self.info.2, FLAGS))
     }
 
     #[cfg(all(any(feature = "legacy", feature = "poll-io"), windows))]
     fn legacy_call(&mut self) -> io::Result<u32> {
-        let fd = self.fd.as_raw_socket();
+        let fd = self.sharedFd.as_raw_socket();
         let mut nsent = 0;
         let ret = unsafe {
             WSASendMsg(

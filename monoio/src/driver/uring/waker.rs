@@ -44,9 +44,9 @@ impl AsRawFd for EventWaker {
 }
 
 #[derive(Clone)]
-pub struct UnparkHandle(pub(crate) std::sync::Weak<EventWaker>);
+pub struct UringUnpark(pub(crate) std::sync::Weak<EventWaker>);
 
-impl Unpark for UnparkHandle {
+impl Unpark for UringUnpark {
     fn unpark(&self) -> std::io::Result<()> {
         if let Some(w) = self.0.upgrade() {
             w.wake()

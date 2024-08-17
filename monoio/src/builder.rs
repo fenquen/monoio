@@ -25,6 +25,7 @@ pub struct RuntimeBuilder<D> {
     // blocking handle
     #[cfg(feature = "sync")]
     blocking_handle: crate::blocking::BlockingHandle,
+
     // driver mark
     _mark: PhantomData<D>,
 }
@@ -32,7 +33,6 @@ pub struct RuntimeBuilder<D> {
 scoped_thread_local!(pub(crate) static BUILD_THREAD_ID: usize);
 
 impl<T> Default for RuntimeBuilder<T> {
-    /// Create a default runtime builder
     #[must_use]
     fn default() -> Self {
         RuntimeBuilder::<T>::new()
@@ -40,7 +40,6 @@ impl<T> Default for RuntimeBuilder<T> {
 }
 
 impl<T> RuntimeBuilder<T> {
-    /// Create a default runtime builder
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -58,10 +57,8 @@ impl<T> RuntimeBuilder<T> {
 
 // ===== buildable trait and forward methods =====
 
-/// Buildable trait.
 pub trait Buildable: Sized {
-    /// Build the runtime.
-    fn build(this: RuntimeBuilder<Self>) -> io::Result<Runtime<Self>>;
+    fn buildRuntime(runtimeBuilder: RuntimeBuilder<Self>) -> io::Result<Runtime<Self>>;
 }
 
 #[allow(unused)]
@@ -70,7 +67,7 @@ macro_rules! direct_build {
         impl RuntimeBuilder<$ty> {
             /// Build the runtime.
             pub fn build(self) -> io::Result<Runtime<$ty>> {
-                Buildable::build(self)
+                Buildable::buildRuntime(self)
             }
         }
     };
@@ -89,28 +86,32 @@ direct_build!(TimeDriver<LegacyDriver>);
 
 #[cfg(feature = "legacy")]
 impl Buildable for LegacyDriver {
-    fn build(this: RuntimeBuilder<Self>) -> io::Result<Runtime<LegacyDriver>> {
+    fn buildRuntime(runtimeBuilder: RuntimeBuilder<LegacyDriver>) -> io::Result<Runtime<LegacyDriver>> {
         let thread_id = gen_id();
+
         #[cfg(feature = "sync")]
-        let blocking_handle = this.blocking_handle;
+        let blocking_handle = runtimeBuilder.blocking_handle;
 
         BUILD_THREAD_ID.set(&thread_id, || {
-            let driver = match this.entries {
+            let legacyDriver = match runtimeBuilder.entries {
                 Some(entries) => LegacyDriver::new_with_entries(entries)?,
                 None => LegacyDriver::new()?,
             };
+
             #[cfg(feature = "sync")]
             let context = crate::runtime::Context::new(blocking_handle);
+
             #[cfg(not(feature = "sync"))]
             let context = crate::runtime::Context::new();
-            Ok(Runtime::new(context, driver))
+
+            Ok(Runtime::new(context, legacyDriver))
         })
     }
 }
 
 #[cfg(all(target_os = "linux", feature = "iouring"))]
 impl Buildable for IoUringDriver {
-    fn build(this: RuntimeBuilder<Self>) -> io::Result<Runtime<IoUringDriver>> {
+    fn buildRuntime(this: RuntimeBuilder<Self>) -> io::Result<Runtime<IoUringDriver>> {
         let thread_id = gen_id();
         #[cfg(feature = "sync")]
         let blocking_handle = this.blocking_handle;
@@ -280,8 +281,10 @@ mod time_wrap {
 
 #[cfg(all(target_os = "linux", feature = "iouring"))]
 impl time_wrap::TimeWrapable for IoUringDriver {}
+
 #[cfg(feature = "legacy")]
 impl time_wrap::TimeWrapable for LegacyDriver {}
+
 #[cfg(any(all(target_os = "linux", feature = "iouring"), feature = "legacy"))]
 impl time_wrap::TimeWrapable for FusionDriver {}
 
@@ -290,11 +293,11 @@ where
     D: Buildable,
 {
     /// Build the runtime
-    fn build(this: RuntimeBuilder<Self>) -> io::Result<Runtime<TimeDriver<D>>> {
+    fn buildRuntime(this: RuntimeBuilder<Self>) -> io::Result<Runtime<TimeDriver<D>>> {
         let Runtime {
             driver,
             mut context,
-        } = Buildable::build(RuntimeBuilder::<D> {
+        } = Buildable::buildRuntime(RuntimeBuilder::<D> {
             entries: this.entries,
             #[cfg(all(target_os = "linux", feature = "iouring"))]
             urb: this.urb,
@@ -346,10 +349,8 @@ impl<D> RuntimeBuilder<D> {
     /// All `spawn_blocking` will be executed on given thread pool.
     #[cfg(feature = "sync")]
     #[must_use]
-    pub fn attach_thread_pool(
-        mut self,
-        tp: Box<dyn crate::blocking::ThreadPool + Send + 'static>,
-    ) -> Self {
+    pub fn attach_thread_pool(mut self,
+                              tp: Box<dyn crate::blocking::ThreadPool + Send + 'static>) -> Self {
         self.blocking_handle = crate::blocking::BlockingHandle::Attached(tp);
         self
     }

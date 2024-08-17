@@ -20,7 +20,7 @@ use super::{
     util::timespec,
     Driver,
     Inner,
-    CURRENT,
+    CURRENT_INNER,
 };
 use crate::utils::slab::Slab;
 
@@ -28,7 +28,7 @@ mod lifecycle;
 #[cfg(feature = "sync")]
 mod waker;
 #[cfg(feature = "sync")]
-pub(crate) use waker::UnparkHandle;
+pub(crate) use waker::UringUnpark;
 
 #[allow(unused)]
 pub(crate) const CANCEL_USERDATA: u64 = u64::MAX;
@@ -349,7 +349,7 @@ impl Driver for IoUringDriver {
     fn with<R>(&self, f: impl FnOnce() -> R) -> R {
         // TODO(ihciah): remove clone
         let inner = Inner::Uring(self.inner.clone());
-        CURRENT.set(&inner, f)
+        CURRENT_INNER.set(&inner, f)
     }
 
     fn submit(&self) -> io::Result<()> {
@@ -368,10 +368,10 @@ impl Driver for IoUringDriver {
     }
 
     #[cfg(feature = "sync")]
-    type Unpark = waker::UnparkHandle;
+    type Unpark = waker::UringUnpark;
 
     #[cfg(feature = "sync")]
-    fn unpark(&self) -> Self::Unpark {
+    fn getUnpark(&self) -> Self::Unpark {
         UringInner::unpark(&self.inner)
     }
 }
@@ -425,7 +425,7 @@ impl UringInner {
         Op {
             driver,
             index: inner.ops.insert(),
-            data: Some(data),
+            opAble: Some(data),
         }
     }
 
@@ -546,10 +546,10 @@ impl UringInner {
     }
 
     #[cfg(feature = "sync")]
-    pub(crate) fn unpark(this: &Rc<UnsafeCell<UringInner>>) -> waker::UnparkHandle {
+    pub(crate) fn unpark(this: &Rc<UnsafeCell<UringInner>>) -> waker::UringUnpark {
         let inner = unsafe { &*this.get() };
         let weak = std::sync::Arc::downgrade(&inner.shared_waker);
-        waker::UnparkHandle(weak)
+        waker::UringUnpark(weak)
     }
 }
 

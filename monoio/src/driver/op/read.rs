@@ -23,10 +23,9 @@ use crate::{
 };
 
 pub(crate) struct Read<T> {
-    /// Holds a strong ref to the FD, preventing the file from being closed
-    /// while the operation is in-flight.
+    /// Holds a strong ref to the FD, preventing the file from being closed while the operation is in-flight.
     #[allow(unused)]
-    fd: SharedFd,
+    sharedFd: SharedFd,
     offset: u64,
 
     /// Reference to the in-flight buffer.
@@ -34,9 +33,9 @@ pub(crate) struct Read<T> {
 }
 
 impl<T: IoBufMut> Op<Read<T>> {
-    pub(crate) fn read_at(fd: &SharedFd, buf: T, offset: u64) -> io::Result<Op<Read<T>>> {
+    pub(crate) fn read_at(sharedFd: &SharedFd, buf: T, offset: u64) -> io::Result<Op<Read<T>>> {
         Op::submit_with(Read {
-            fd: fd.clone(),
+            sharedFd: sharedFd.clone(),
             offset,
             buf,
         })
@@ -66,7 +65,7 @@ impl<T: IoBufMut> OpAble for Read<T> {
     #[cfg(all(target_os = "linux", feature = "iouring"))]
     fn uring_op(&mut self) -> io_uring::squeue::Entry {
         opcode::Read::new(
-            types::Fd(self.fd.raw_fd()),
+            types::Fd(self.sharedFd.raw_fd()),
             self.buf.write_ptr(),
             self.buf.bytes_total() as _,
         )
@@ -77,12 +76,12 @@ impl<T: IoBufMut> OpAble for Read<T> {
     #[cfg(any(feature = "legacy", feature = "poll-io"))]
     #[inline]
     fn legacy_interest(&self) -> Option<(Direction, usize)> {
-        self.fd.registered_index().map(|idx| (Direction::Read, idx))
+        self.sharedFd.registered_index().map(|idx| (Direction::Read, idx))
     }
 
     #[cfg(all(any(feature = "legacy", feature = "poll-io"), unix))]
     fn legacy_call(&mut self) -> io::Result<u32> {
-        let fd = self.fd.as_raw_fd();
+        let fd = self.sharedFd.as_raw_fd();
         let seek_offset = libc::off_t::try_from(self.offset)
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "offset too big"))?;
         #[cfg(not(target_os = "macos"))]
@@ -104,7 +103,7 @@ impl<T: IoBufMut> OpAble for Read<T> {
 
     #[cfg(all(any(feature = "legacy", feature = "poll-io"), windows))]
     fn legacy_call(&mut self) -> io::Result<u32> {
-        let fd = self.fd.raw_handle() as _;
+        let fd = self.sharedFd.raw_handle() as _;
         let seek_offset = libc::off_t::try_from(self.offset)
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "offset too big"))?;
         let mut bytes_read = 0;

@@ -7,14 +7,6 @@ use std::{
 
 #[cfg(all(target_os = "linux", feature = "iouring"))]
 use io_uring::{opcode, types};
-#[cfg(windows)]
-use {
-    crate::syscall,
-    std::os::windows::prelude::AsRawSocket,
-    windows_sys::Win32::Networking::WinSock::{
-        accept, socklen_t, INVALID_SOCKET, SOCKADDR_STORAGE,
-    },
-};
 
 use super::{super::shared_fd::SharedFd, Op, OpAble};
 #[cfg(any(feature = "legacy", feature = "poll-io"))]
@@ -27,8 +19,6 @@ pub(crate) struct Accept {
     pub(crate) fd: SharedFd,
     #[cfg(unix)]
     pub(crate) addr: Box<(MaybeUninit<libc::sockaddr_storage>, libc::socklen_t)>,
-    #[cfg(windows)]
-    pub(crate) addr: Box<(MaybeUninit<SOCKADDR_STORAGE>, socklen_t)>,
 }
 
 impl Op<Accept> {
@@ -38,12 +28,6 @@ impl Op<Accept> {
         let addr = Box::new((
             MaybeUninit::uninit(),
             size_of::<libc::sockaddr_storage>() as libc::socklen_t,
-        ));
-
-        #[cfg(windows)]
-        let addr = Box::new((
-            MaybeUninit::uninit(),
-            size_of::<SOCKADDR_STORAGE>() as socklen_t,
         ));
 
         Op::submit_with(Accept {

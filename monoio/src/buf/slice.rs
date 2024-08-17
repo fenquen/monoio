@@ -271,10 +271,7 @@ impl<T: IoVecBuf> IoVecWrapper<T> {
         if buf.read_iovec_len() == 0 {
             return Err(buf);
         }
-        #[cfg(windows)]
-        if buf.read_wsabuf_len() == 0 {
-            return Err(buf);
-        }
+
         Ok(Self { raw: buf })
     }
 
@@ -293,11 +290,6 @@ unsafe impl<T: IoVecBuf> IoBuf for IoVecWrapper<T> {
             let iovec = unsafe { *self.raw.read_iovec_ptr() };
             iovec.iov_base as *const u8
         }
-        #[cfg(windows)]
-        {
-            let wsabuf = unsafe { *self.raw.read_wsabuf_ptr() };
-            wsabuf.buf as *const u8
-        }
     }
 
     #[inline]
@@ -306,11 +298,6 @@ unsafe impl<T: IoVecBuf> IoBuf for IoVecWrapper<T> {
         {
             let iovec = unsafe { *self.raw.read_iovec_ptr() };
             iovec.iov_len
-        }
-        #[cfg(windows)]
-        {
-            let wsabuf = unsafe { *self.raw.read_wsabuf_ptr() };
-            wsabuf.len as _
         }
     }
 }
@@ -329,10 +316,7 @@ impl<T: IoVecBufMut> IoVecWrapperMut<T> {
         if iovec_buf.write_iovec_len() == 0 {
             return Err(iovec_buf);
         }
-        #[cfg(windows)]
-        if iovec_buf.write_wsabuf_len() == 0 {
-            return Err(iovec_buf);
-        }
+
         Ok(Self { raw: iovec_buf })
     }
 
@@ -350,11 +334,6 @@ unsafe impl<T: IoVecBufMut> IoBufMut for IoVecWrapperMut<T> {
             let iovec = unsafe { *self.raw.write_iovec_ptr() };
             iovec.iov_base as *mut u8
         }
-        #[cfg(windows)]
-        {
-            let wsabuf = unsafe { *self.raw.write_wsabuf_ptr() };
-            wsabuf.buf
-        }
     }
 
     fn bytes_total(&mut self) -> usize {
@@ -362,11 +341,6 @@ unsafe impl<T: IoVecBufMut> IoBufMut for IoVecWrapperMut<T> {
         {
             let iovec = unsafe { *self.raw.write_iovec_ptr() };
             iovec.iov_len
-        }
-        #[cfg(windows)]
-        {
-            let wsabuf = unsafe { *self.raw.write_wsabuf_ptr() };
-            wsabuf.len as _
         }
     }
 

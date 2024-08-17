@@ -1,48 +1,39 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Weak;
 use crate::driver::unpark::Unpark;
 
-pub(crate) struct EventWaker {
-    // raw waker
-    #[cfg(windows)]
-    waker: super::iocp::Waker,
+pub(crate) struct MioWakerWrapper {
     #[cfg(unix)]
-    waker: mio::Waker,
-    // Atomic awake status
-    pub(crate) awake: std::sync::atomic::AtomicBool,
+    mioWaker: mio::Waker,
+    pub(crate) awake: AtomicBool,
 }
 
-impl EventWaker {
+impl MioWakerWrapper {
     #[cfg(unix)]
     pub(crate) fn new(waker: mio::Waker) -> Self {
         Self {
-            waker,
-            awake: std::sync::atomic::AtomicBool::new(true),
-        }
-    }
-
-    #[cfg(windows)]
-    pub(crate) fn new(waker: super::iocp::Waker) -> Self {
-        Self {
-            waker,
-            awake: std::sync::atomic::AtomicBool::new(true),
+            mioWaker: waker,
+            awake: AtomicBool::new(true),
         }
     }
 
     pub(crate) fn wake(&self) -> std::io::Result<()> {
-        // Skip wake if already awake
-        if self.awake.load(std::sync::atomic::Ordering::Acquire) {
+        // already awake
+        if self.awake.load(Ordering::Acquire) {
             return Ok(());
         }
-        self.waker.wake()
+
+        self.mioWaker.wake()
     }
 }
 
 #[derive(Clone)]
-pub struct UnparkHandle(pub(crate) std::sync::Weak<EventWaker>);
+pub struct LegacyUnpark(pub(crate) Weak<MioWakerWrapper>);
 
-impl Unpark for UnparkHandle {
+impl Unpark for LegacyUnpark {
     fn unpark(&self) -> std::io::Result<()> {
-        if let Some(w) = self.0.upgrade() {
-            w.wake()
+        if let Some(mioWakerWrapper) = self.0.upgrade() {
+            mioWakerWrapper.wake()
         } else {
             Ok(())
         }

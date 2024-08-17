@@ -45,7 +45,7 @@ impl Handle {
     /// and so gets executed inside the runtime successfully without
     /// panicking.
     pub(crate) fn current() -> Self {
-        crate::runtime::CURRENT.with(|c| {
+        crate::runtime::CURRENT_CONTEXT.with(|c| {
             c.time_handle.clone().expect(
                 "unable to get time handle, maybe you have not enable_timer on creating runtime?",
             )

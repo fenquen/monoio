@@ -1,5 +1,3 @@
-#[cfg(windows)]
-use std::os::windows::io::{AsRawHandle, RawHandle};
 #[cfg(unix)]
 use std::{
     fs::File as StdFile,
@@ -504,12 +502,5 @@ impl File {
 impl AsRawFd for File {
     fn as_raw_fd(&self) -> RawFd {
         self.fd.raw_fd()
-    }
-}
-
-#[cfg(windows)]
-impl AsRawHandle for File {
-    fn as_raw_handle(&self) -> RawHandle {
-        self.fd.raw_handle()
     }
 }

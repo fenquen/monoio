@@ -2,10 +2,6 @@
 #[cfg(unix)]
 pub type BindError<T> = nix::Result<T>;
 
-/// Bind error
-#[cfg(windows)]
-pub type BindError<T> = std::io::Result<T>;
-
 /// Bind current thread to given cpus
 #[cfg(any(target_os = "android", target_os = "dragonfly", target_os = "linux"))]
 pub fn bind_to_cpu_set(cpus: impl IntoIterator<Item = usize>) -> BindError<()> {
@@ -22,12 +18,6 @@ pub fn bind_to_cpu_set(cpus: impl IntoIterator<Item = usize>) -> BindError<()> {
     unix,
     not(any(target_os = "android", target_os = "dragonfly", target_os = "linux"))
 ))]
-pub fn bind_to_cpu_set(_: impl IntoIterator<Item = usize>) -> BindError<()> {
-    Ok(())
-}
-
-/// Bind current thread to given cpus
-#[cfg(windows)]
 pub fn bind_to_cpu_set(_: impl IntoIterator<Item = usize>) -> BindError<()> {
     Ok(())
 }

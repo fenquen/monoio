@@ -7,8 +7,7 @@ pub struct Iter<I> {
     iter: I,
 }
 
-/// Converts an `Iterator` into a `Stream` which is always ready
-/// to yield the next value.
+/// Converts an `Iterator` into a `Stream` which is always ready to yield the next value.
 pub fn iter<I>(i: I) -> Iter<I::IntoIter>
 where
     I: IntoIterator,
@@ -18,10 +17,7 @@ where
     })
 }
 
-impl<I> Stream for Iter<I>
-where
-    I: Iterator,
-{
+impl<I: Iterator> Stream for Iter<I> {
     type Item = I::Item;
 
     async fn next(&mut self) -> Option<Self::Item> {

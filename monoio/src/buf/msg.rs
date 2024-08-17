@@ -2,8 +2,6 @@ use std::ops::{Deref, DerefMut};
 
 #[cfg(unix)]
 use libc::msghdr;
-#[cfg(windows)]
-use windows_sys::Win32::Networking::WinSock::WSAMSG;
 
 /// An `io_uring` compatible msg buffer.
 ///
@@ -19,10 +17,6 @@ pub unsafe trait MsgBuf: Unpin + 'static {
     /// Also, the value pointed must be a valid msghdr struct.
     #[cfg(unix)]
     fn read_msghdr_ptr(&self) -> *const msghdr;
-
-    /// Returns a raw pointer to WSAMSG struct.
-    #[cfg(windows)]
-    fn read_wsamsg_ptr(&self) -> *const WSAMSG;
 }
 
 /// An `io_uring` compatible msg buffer.
@@ -39,18 +33,12 @@ pub unsafe trait MsgBufMut: Unpin + 'static {
     /// Also, the value pointed must be a valid msghdr struct.
     #[cfg(unix)]
     fn write_msghdr_ptr(&mut self) -> *mut msghdr;
-
-    /// Returns a raw pointer to WSAMSG struct.
-    #[cfg(windows)]
-    fn write_wsamsg_ptr(&mut self) -> *mut WSAMSG;
 }
 
 #[allow(missing_docs)]
 pub struct MsgMeta {
     #[cfg(unix)]
     pub(crate) data: msghdr,
-    #[cfg(windows)]
-    pub(crate) data: WSAMSG,
 }
 
 unsafe impl MsgBuf for MsgMeta {
@@ -58,21 +46,11 @@ unsafe impl MsgBuf for MsgMeta {
     fn read_msghdr_ptr(&self) -> *const msghdr {
         &self.data
     }
-
-    #[cfg(windows)]
-    fn read_wsamsg_ptr(&self) -> *const WSAMSG {
-        &self.data
-    }
 }
 
 unsafe impl MsgBufMut for MsgMeta {
     #[cfg(unix)]
     fn write_msghdr_ptr(&mut self) -> *mut msghdr {
-        &mut self.data
-    }
-
-    #[cfg(windows)]
-    fn write_wsamsg_ptr(&mut self) -> *mut WSAMSG {
         &mut self.data
     }
 }
@@ -94,29 +72,6 @@ impl Deref for MsgMeta {
 }
 
 #[cfg(unix)]
-impl DerefMut for MsgMeta {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.data
-    }
-}
-
-#[cfg(windows)]
-impl From<WSAMSG> for MsgMeta {
-    fn from(data: WSAMSG) -> Self {
-        Self { data }
-    }
-}
-
-#[cfg(windows)]
-impl Deref for MsgMeta {
-    type Target = WSAMSG;
-
-    fn deref(&self) -> &Self::Target {
-        &self.data
-    }
-}
-
-#[cfg(windows)]
 impl DerefMut for MsgMeta {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.data

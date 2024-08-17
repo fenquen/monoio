@@ -1,18 +1,13 @@
-use std::{
-    fmt,
-    sync::atomic::{
-        AtomicUsize,
-        Ordering::{AcqRel, Acquire, Release},
-    },
-};
+use std::{fmt, process, sync::atomic::{AtomicUsize, Ordering::{AcqRel, Acquire, Release}}};
+use std::sync::atomic::Ordering;
 
 pub(crate) struct State(AtomicUsize);
 
 /// Current state value
 #[derive(Copy, Clone)]
-pub(crate) struct Snapshot(usize);
+pub(crate) struct StateSnapshot(usize);
 
-type UpdateResult = Result<Snapshot, Snapshot>;
+type UpdateResult = Result<StateSnapshot, StateSnapshot>;
 
 /// The task is currently being run.
 const RUNNING: usize = 0b0001;
@@ -76,11 +71,11 @@ impl State {
         State(AtomicUsize::new(INITIAL_STATE))
     }
 
-    pub(crate) fn load(&self) -> Snapshot {
-        Snapshot(self.0.load(Acquire))
+    pub(crate) fn load(&self) -> StateSnapshot {
+        StateSnapshot(self.0.load(Acquire))
     }
 
-    pub(crate) fn store(&self, val: Snapshot) {
+    pub(crate) fn store(&self, val: StateSnapshot) {
         self.0.store(val.0, Release);
     }
 
@@ -90,8 +85,10 @@ impl State {
         self.fetch_update_action(|mut curr| {
             debug_assert!(curr.is_notified());
             debug_assert!(curr.is_idle());
+
             curr.set_running();
             curr.unset_notified();
+
             ((), Some(curr))
         });
     }
@@ -100,6 +97,7 @@ impl State {
     pub(super) fn transition_to_idle(&self) -> TransitionToIdle {
         self.fetch_update_action(|mut curr| {
             debug_assert!(curr.is_running());
+
             curr.unset_running();
             let action = if curr.is_notified() {
                 TransitionToIdle::OkNotified
@@ -111,14 +109,14 @@ impl State {
     }
 
     /// Transitions the task from `Running` -> `Complete`.
-    pub(super) fn transition_to_complete(&self) -> Snapshot {
+    pub(super) fn transition_to_complete(&self) -> StateSnapshot {
         const DELTA: usize = RUNNING | COMPLETE;
 
-        let prev = Snapshot(self.0.fetch_xor(DELTA, AcqRel));
+        let prev = StateSnapshot(self.0.fetch_xor(DELTA, AcqRel));
         debug_assert!(prev.is_running());
         debug_assert!(!prev.is_complete());
 
-        Snapshot(prev.0 ^ DELTA)
+        StateSnapshot(prev.0 ^ DELTA)
     }
 
     /// Try transitions the state to `NOTIFIED`, but if it cannot do it without submitting, it will
@@ -128,12 +126,14 @@ impl State {
         self.fetch_update_action(|mut curr| {
             if curr.is_running() {
                 curr.set_notified();
-                (true, Some(curr))
-            } else if curr.is_complete() || curr.is_notified() {
-                (true, Some(curr))
-            } else {
-                (false, Some(curr))
+                return (true, Some(curr));
             }
+
+            if curr.is_complete() || curr.is_notified() {
+                return (true, Some(curr));
+            }
+
+            (false, Some(curr))
         })
     }
 
@@ -157,7 +157,7 @@ impl State {
     /// __immediately__ dropped on spawn
     pub(super) fn drop_join_handle_fast(&self) -> Result<(), ()> {
         if *self.load() == INITIAL_STATE {
-            self.store(Snapshot((INITIAL_STATE - REF_ONE) & !JOIN_INTEREST));
+            self.store(StateSnapshot((INITIAL_STATE - REF_ONE) & !JOIN_INTEREST));
             trace!("MONOIO DEBUG[State]: drop_join_handle_fast");
             Ok(())
         } else {
@@ -186,8 +186,7 @@ impl State {
 
     /// Set the `JOIN_WAKER` bit.
     ///
-    /// Returns `Ok` if the bit is set, `Err` otherwise. This operation fails if
-    /// the task has completed.
+    /// Returns `Ok` if the bit is set, `Err` otherwise. This operation fails if the task has completed.
     pub(super) fn set_join_waker(&self) -> UpdateResult {
         self.fetch_update(|curr| {
             assert!(curr.is_join_interested());
@@ -206,8 +205,7 @@ impl State {
 
     /// Unsets the `JOIN_WAKER` bit.
     ///
-    /// Returns `Ok` has been unset, `Err` otherwise. This operation fails if
-    /// the task has completed.
+    /// Returns `Ok` has been unset, `Err` otherwise. This operation fails if the task has completed.
     pub(super) fn unset_waker(&self) -> UpdateResult {
         self.fetch_update(|curr| {
             assert!(curr.is_join_interested());
@@ -225,15 +223,9 @@ impl State {
     }
 
     pub(crate) fn ref_inc(&self) {
-        use std::{process, sync::atomic::Ordering::Relaxed};
+        let prev = StateSnapshot(self.0.fetch_add(REF_ONE, Ordering::Relaxed));
 
-        let prev = Snapshot(self.0.fetch_add(REF_ONE, Relaxed));
-
-        trace!(
-            "MONOIO DEBUG[State]: ref_inc {}, ptr: {:p}",
-            prev.ref_count() + 1,
-            self
-        );
+        trace!("MONOIO DEBUG[State]: ref_inc {}, ptr: {:p}",prev.ref_count() + 1,self);
 
         // If the reference count overflowed, abort.
         if prev.0 > isize::MAX as usize {
@@ -243,19 +235,15 @@ impl State {
 
     /// Returns `true` if the task should be released.
     pub(crate) fn ref_dec(&self) -> bool {
-        let prev = Snapshot(self.0.fetch_sub(REF_ONE, AcqRel));
+        let prev = StateSnapshot(self.0.fetch_sub(REF_ONE, AcqRel));
         debug_assert!(prev.ref_count() >= 1);
-        trace!(
-            "MONOIO DEBUG[State]: ref_dec {}, ptr: {:p}",
-            prev.ref_count() - 1,
-            self
-        );
+        trace!("MONOIO DEBUG[State]: ref_dec {}, ptr: {:p}",prev.ref_count() - 1,self);
         prev.ref_count() == 1
     }
 
     fn fetch_update_action<F, T>(&self, mut f: F) -> T
     where
-        F: FnMut(Snapshot) -> (T, Option<Snapshot>),
+        F: FnMut(StateSnapshot) -> (T, Option<StateSnapshot>),
     {
         let mut curr = self.load();
 
@@ -270,15 +258,12 @@ impl State {
 
             match res {
                 Ok(_) => return output,
-                Err(actual) => curr = Snapshot(actual),
+                Err(actual) => curr = StateSnapshot(actual),
             }
         }
     }
 
-    fn fetch_update<F>(&self, mut f: F) -> Result<Snapshot, Snapshot>
-    where
-        F: FnMut(Snapshot) -> Option<Snapshot>,
-    {
+    fn fetch_update< F: FnMut(StateSnapshot) -> Option<StateSnapshot>>(&self, mut f: F) -> Result<StateSnapshot, StateSnapshot> {
         let mut curr = self.load();
 
         loop {
@@ -287,17 +272,15 @@ impl State {
                 None => return Err(curr),
             };
 
-            let res = self.0.compare_exchange(curr.0, next.0, AcqRel, Acquire);
-
-            match res {
+            match self.0.compare_exchange(curr.0, next.0, AcqRel, Acquire) {
                 Ok(_) => return Ok(next),
-                Err(actual) => curr = Snapshot(actual),
+                Err(actual) => curr = StateSnapshot(actual),
             }
         }
     }
 }
 
-impl std::ops::Deref for Snapshot {
+impl std::ops::Deref for StateSnapshot {
     type Target = usize;
 
     fn deref(&self) -> &Self::Target {
@@ -305,7 +288,7 @@ impl std::ops::Deref for Snapshot {
     }
 }
 
-impl Snapshot {
+impl StateSnapshot {
     /// Returns `true` if the task is in an idle state.
     pub(super) fn is_idle(self) -> bool {
         self.0 & (RUNNING | COMPLETE) == 0
@@ -373,7 +356,7 @@ impl fmt::Debug for State {
     }
 }
 
-impl fmt::Debug for Snapshot {
+impl fmt::Debug for StateSnapshot {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.debug_struct("Snapshot")
             .field("is_running", &self.is_running())

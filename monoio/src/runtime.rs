@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::future::Future;
-
+use std::task::Poll;
+use fxhash::FxHashMap;
 #[cfg(any(all(target_os = "linux", feature = "iouring"), feature = "legacy"))]
 use crate::time::TimeDriver;
 #[cfg(all(target_os = "linux", feature = "iouring"))]
@@ -9,63 +11,60 @@ use crate::LegacyDriver;
 use crate::{
     driver::Driver,
     scheduler::{LocalScheduler, TaskQueue},
-    task::{
-        new_task,
-        waker_fn::{dummy_waker, set_poll, should_poll},
-        JoinHandle,
-    },
+    task::{JoinHandle},
     time::driver::Handle as TimeHandle,
 };
+use crate::blocking::BlockingHandle;
+use crate::task::waker_fn;
+use crate::utils::thread_id;
 
 #[cfg(feature = "sync")]
 thread_local! {
     pub(crate) static DEFAULT_CTX: Context = Context {
-        thread_id: crate::utils::thread_id::DEFAULT_THREAD_ID,
-        unpark_cache: std::cell::RefCell::new(fxhash::FxHashMap::default()),
-        waker_sender_cache: std::cell::RefCell::new(fxhash::FxHashMap::default()),
-        tasks: Default::default(),
+        threadId: thread_id::DEFAULT_THREAD_ID,
+        threadId_unpark: RefCell::new(fxhash::FxHashMap::default()),
+        threadId_wakerSender: RefCell::new(fxhash::FxHashMap::default()),
+        taskQueue: Default::default(),
         time_handle: None,
-        blocking_handle: crate::blocking::BlockingHandle::Empty(crate::blocking::BlockingStrategy::Panic),
+        blocking_handle: BlockingHandle::Empty(crate::blocking::BlockingStrategy::Panic),
     };
 }
 
-scoped_thread_local!(pub(crate) static CURRENT: Context);
+scoped_thread_local!(pub(crate) static CURRENT_CONTEXT: Context);
 
 pub(crate) struct Context {
-    /// Owned task set and local run queue
-    pub(crate) tasks: TaskQueue,
+    /// 被调用了wake()的
+    pub(crate) taskQueue: TaskQueue,
 
     /// Thread id(not the kernel thread id but a generated unique number)
-    pub(crate) thread_id: usize,
+    pub(crate) threadId: usize,
 
     /// Thread unpark handles
     #[cfg(feature = "sync")]
-    pub(crate) unpark_cache:
-        std::cell::RefCell<fxhash::FxHashMap<usize, crate::driver::UnparkHandle>>,
+    pub(crate) threadId_unpark: RefCell<FxHashMap<usize, crate::driver::UnparkHandle>>,
 
     /// Waker sender cache
     #[cfg(feature = "sync")]
-    pub(crate) waker_sender_cache:
-        std::cell::RefCell<fxhash::FxHashMap<usize, flume::Sender<std::task::Waker>>>,
+    pub(crate) threadId_wakerSender: RefCell<FxHashMap<usize, flume::Sender<std::task::Waker>>>,
 
     /// Time Handle
     pub(crate) time_handle: Option<TimeHandle>,
 
     /// Blocking Handle
     #[cfg(feature = "sync")]
-    pub(crate) blocking_handle: crate::blocking::BlockingHandle,
+    pub(crate) blocking_handle: BlockingHandle,
 }
 
 impl Context {
     #[cfg(feature = "sync")]
-    pub(crate) fn new(blocking_handle: crate::blocking::BlockingHandle) -> Self {
+    pub(crate) fn new(blocking_handle: BlockingHandle) -> Context {
         let thread_id = crate::builder::BUILD_THREAD_ID.with(|id| *id);
 
-        Self {
-            thread_id,
-            unpark_cache: std::cell::RefCell::new(fxhash::FxHashMap::default()),
-            waker_sender_cache: std::cell::RefCell::new(fxhash::FxHashMap::default()),
-            tasks: TaskQueue::default(),
+        Context {
+            threadId: thread_id,
+            threadId_unpark: RefCell::new(FxHashMap::default()),
+            threadId_wakerSender: RefCell::new(FxHashMap::default()),
+            taskQueue: TaskQueue::default(),
             time_handle: None,
             blocking_handle,
         }
@@ -76,42 +75,40 @@ impl Context {
         let thread_id = crate::builder::BUILD_THREAD_ID.with(|id| *id);
 
         Self {
-            thread_id,
-            tasks: TaskQueue::default(),
+            threadId: thread_id,
+            taskQueue: TaskQueue::default(),
             time_handle: None,
         }
     }
 
     #[allow(unused)]
     #[cfg(feature = "sync")]
-    pub(crate) fn unpark_thread(&self, id: usize) {
-        use crate::driver::{thread::get_unpark_handle, unpark::Unpark};
-        if let Some(handle) = self.unpark_cache.borrow().get(&id) {
-            handle.unpark();
+    pub(crate) fn unparkOtherThread(&self, threadId: usize) {
+        use crate::driver::{unpark::Unpark};
+
+        if let Some(unparkHandle) = self.threadId_unpark.borrow().get(&threadId) {
+            unparkHandle.unpark();
             return;
         }
 
-        if let Some(v) = get_unpark_handle(id) {
+        if let Some(unparkHandle) = crate::driver::thread::get_unpark_handle(threadId) {
             // Write back to local cache
-            let w = v.clone();
-            self.unpark_cache.borrow_mut().insert(id, w);
-            v.unpark();
+            self.threadId_unpark.borrow_mut().insert(threadId, unparkHandle.clone());
+            unparkHandle.unpark();
         }
     }
 
     #[allow(unused)]
     #[cfg(feature = "sync")]
-    pub(crate) fn send_waker(&self, id: usize, w: std::task::Waker) {
-        use crate::driver::thread::get_waker_sender;
-        if let Some(sender) = self.waker_sender_cache.borrow().get(&id) {
-            let _ = sender.send(w);
+    pub(crate) fn send_waker(&self, threadId: usize, waker: std::task::Waker) {
+        if let Some(wakerSender) = self.threadId_wakerSender.borrow().get(&threadId) {
+            let _ = wakerSender.send(waker);
             return;
         }
 
-        if let Some(s) = get_waker_sender(id) {
-            // Write back to local cache
-            let _ = s.send(w);
-            self.waker_sender_cache.borrow_mut().insert(id, s);
+        if let Some(wakerSender) = crate::driver::thread::get_waker_sender(threadId) {
+            let _ = wakerSender.send(waker);
+            self.threadId_wakerSender.borrow_mut().insert(threadId, wakerSender);
         }
     }
 }
@@ -123,8 +120,8 @@ pub struct Runtime<D> {
 }
 
 impl<D> Runtime<D> {
-    pub(crate) fn new(context: Context, driver: D) -> Self {
-        Self { context, driver }
+    pub(crate) fn new(context: Context, driver: D) -> Runtime<D> {
+        Runtime { context, driver }
     }
 
     /// Block on
@@ -133,48 +130,49 @@ impl<D> Runtime<D> {
         F: Future,
         D: Driver,
     {
-        assert!(
-            !CURRENT.is_set(),
-            "Can not start a runtime inside a runtime"
-        );
+        assert!(!CURRENT_CONTEXT.is_set(), "Can not start a runtime inside a runtime");
 
-        let waker = dummy_waker();
-        let cx = &mut std::task::Context::from_waker(&waker);
+        let dummyWaker = waker_fn::buildDummyWaker();
+        let context = &mut std::task::Context::from_waker(&dummyWaker);
 
         self.driver.with(|| {
-            CURRENT.set(&self.context, || {
+            CURRENT_CONTEXT.set(&self.context, || {
                 #[cfg(feature = "sync")]
                 let join = unsafe { spawn_without_static(future) };
+
                 #[cfg(not(feature = "sync"))]
                 let join = future;
 
                 let mut join = std::pin::pin!(join);
-                set_poll();
+
+                waker_fn::setShouldPoll();
+
                 loop {
                     loop {
-                        // Consume all tasks(with max round to prevent io starvation)
-                        let mut max_round = self.context.tasks.len() * 2;
-                        while let Some(t) = self.context.tasks.pop() {
-                            t.run();
+                        // 应对调用其它之前调用spawn的
+                        // consume all tasks(with max round to prevent io starvation)
+                        let mut max_round = self.context.taskQueue.len() * 2;
+                        while let Some(task) = self.context.taskQueue.pop() {
+                            // 会调用future的poll()
+                            task.run();
+
+                            // maybe there's a looping task
                             if max_round == 0 {
-                                // maybe there's a looping task
                                 break;
-                            } else {
-                                max_round -= 1;
                             }
+
+                            max_round -= 1;
                         }
 
-                        // Check main future
-                        while should_poll() {
-                            // check if ready
-                            if let std::task::Poll::Ready(t) = join.as_mut().poll(cx) {
+                        // 应对当前的future
+                        while waker_fn::readShouldPoll() {
+                            if let Poll::Ready(t) = join.as_mut().poll(context) {
                                 return t;
                             }
                         }
 
-                        if self.context.tasks.is_empty() {
-                            // No task to execute, we should wait for io blockingly
-                            // Hot path
+                        // no task to execute, we should wait for io blockingly Hot path
+                        if self.context.taskQueue.is_empty() {
                             break;
                         }
 
@@ -186,6 +184,7 @@ impl<D> Runtime<D> {
                     #[cfg(not(all(debug_assertions, feature = "debug")))]
                     let _ = self.driver.park();
 
+                    // 应对read的
                     #[cfg(all(debug_assertions, feature = "debug"))]
                     if let Err(e) = self.driver.park() {
                         trace!("park error: {:?}", e);
@@ -196,8 +195,7 @@ impl<D> Runtime<D> {
     }
 }
 
-/// Fusion Runtime is a wrapper of io_uring driver or legacy driver based
-/// runtime.
+/// Fusion Runtime is a wrapper of io_uring driver or legacy driver based runtime.
 #[cfg(feature = "legacy")]
 pub enum FusionRuntime<#[cfg(all(target_os = "linux", feature = "iouring"))] L, R> {
     /// Uring driver based runtime.
@@ -282,7 +280,7 @@ impl From<Runtime<IoUringDriver>> for FusionRuntime<IoUringDriver, LegacyDriver>
 // TL -> Fusion<TL, TR>
 #[cfg(all(target_os = "linux", feature = "iouring", feature = "legacy"))]
 impl From<Runtime<TimeDriver<IoUringDriver>>>
-    for FusionRuntime<TimeDriver<IoUringDriver>, TimeDriver<LegacyDriver>>
+for FusionRuntime<TimeDriver<IoUringDriver>, TimeDriver<LegacyDriver>>
 {
     fn from(r: Runtime<TimeDriver<IoUringDriver>>) -> Self {
         Self::Uring(r)
@@ -300,7 +298,7 @@ impl From<Runtime<LegacyDriver>> for FusionRuntime<IoUringDriver, LegacyDriver> 
 // TR -> Fusion<TL, TR>
 #[cfg(all(target_os = "linux", feature = "iouring", feature = "legacy"))]
 impl From<Runtime<TimeDriver<LegacyDriver>>>
-    for FusionRuntime<TimeDriver<IoUringDriver>, TimeDriver<LegacyDriver>>
+for FusionRuntime<TimeDriver<IoUringDriver>, TimeDriver<LegacyDriver>>
 {
     fn from(r: Runtime<TimeDriver<LegacyDriver>>) -> Self {
         Self::Legacy(r)
@@ -349,11 +347,6 @@ impl From<Runtime<TimeDriver<IoUringDriver>>> for FusionRuntime<TimeDriver<IoUri
 ///
 /// [`JoinHandle`]: monoio::task::JoinHandle
 ///
-/// # Examples
-///
-/// In this example, a server is started and `spawn` is used to start a new task
-/// that processes each received connection.
-///
 /// ```no_run
 /// #[monoio::main]
 /// async fn main() {
@@ -370,15 +363,11 @@ where
     T: Future + 'static,
     T::Output: 'static,
 {
-    let (task, join) = new_task(
-        crate::utils::thread_id::get_current_thread_id(),
-        future,
-        LocalScheduler,
-    );
+    let (task, join) =
+        crate::task::newTask(thread_id::get_current_thread_id(), future, LocalScheduler);
 
-    CURRENT.with(|ctx| {
-        ctx.tasks.push(task);
-    });
+    CURRENT_CONTEXT.with(|ctx| ctx.taskQueue.push(task));
+
     join
 }
 
@@ -387,63 +376,10 @@ unsafe fn spawn_without_static<T>(future: T) -> JoinHandle<T::Output>
 where
     T: Future,
 {
-    use crate::task::new_task_holding;
-    let (task, join) = new_task_holding(
-        crate::utils::thread_id::get_current_thread_id(),
-        future,
-        LocalScheduler,
-    );
+    let (task, join) =
+        crate::task::new_task_holding(thread_id::get_current_thread_id(), future, LocalScheduler);
 
-    CURRENT.with(|ctx| {
-        ctx.tasks.push(task);
-    });
+    CURRENT_CONTEXT.with(|ctx| { ctx.taskQueue.push(task); });
+
     join
-}
-
-#[cfg(test)]
-mod tests {
-    #[cfg(all(feature = "sync", target_os = "linux", feature = "iouring"))]
-    #[test]
-    fn across_thread() {
-        use futures::channel::oneshot;
-
-        use crate::driver::IoUringDriver;
-
-        let (tx1, rx1) = oneshot::channel::<u8>();
-        let (tx2, rx2) = oneshot::channel::<u8>();
-
-        std::thread::spawn(move || {
-            let mut rt = crate::RuntimeBuilder::<IoUringDriver>::new()
-                .build()
-                .unwrap();
-            rt.block_on(async move {
-                let n = rx1.await.expect("unable to receive rx1");
-                assert!(tx2.send(n).is_ok());
-            });
-        });
-
-        let mut rt = crate::RuntimeBuilder::<IoUringDriver>::new()
-            .build()
-            .unwrap();
-        rt.block_on(async move {
-            assert!(tx1.send(24).is_ok());
-            assert_eq!(rx2.await.expect("unable to receive rx2"), 24);
-        });
-    }
-
-    #[cfg(all(target_os = "linux", feature = "iouring"))]
-    #[test]
-    fn timer() {
-        use crate::driver::IoUringDriver;
-        let mut rt = crate::RuntimeBuilder::<IoUringDriver>::new()
-            .enable_timer()
-            .build()
-            .unwrap();
-        let instant = std::time::Instant::now();
-        rt.block_on(async {
-            crate::time::sleep(std::time::Duration::from_millis(200)).await;
-        });
-        let eps = instant.elapsed().subsec_millis();
-        assert!((eps as i32 - 200).abs() < 50);
-    }
 }

@@ -25,7 +25,6 @@ mod msg;
 pub use msg::{MsgBuf, MsgBufMut, MsgMeta};
 
 pub(crate) fn deref(buf: &impl IoBuf) -> &[u8] {
-    // Safety: the `IoBuf` trait is marked as unsafe and is expected to be
-    // implemented correctly.
+    // Safety: the `IoBuf` trait is marked as unsafe and is expected to be implemented correctly.
     unsafe { std::slice::from_raw_parts(buf.read_ptr(), buf.bytes_init()) }
 }

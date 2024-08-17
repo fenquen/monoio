@@ -33,8 +33,8 @@ impl Poll {
 
             if let Some(mut sio) = self.io_dispatch.get(token.0) {
                 let ref_mut = sio.as_mut();
-                let ready = super::ready::Ready::from_mio(event);
-                ref_mut.set_readiness(|curr| curr | ready);
+                let ready = super::ready::Ready::fromMioEvent(event);
+                ref_mut.setReady(|curr| curr | ready);
                 ref_mut.wake(ready);
             }
         }
@@ -81,14 +81,14 @@ impl Poll {
     ) -> std::task::Poll<CompletionMeta> {
         let mut scheduled_io = self.io_dispatch.get(token).expect("scheduled_io lost");
         let ref_mut = scheduled_io.as_mut();
-        ready!(ref_mut.poll_readiness(cx, direction));
+        ready!(ref_mut.isReady(cx, direction));
         match syscall() {
             Ok(n) => std::task::Poll::Ready(CompletionMeta {
                 result: Ok(n),
                 flags: 0,
             }),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                ref_mut.clear_readiness(direction.mask());
+                ref_mut.clearReady(direction.mask());
                 ref_mut.set_waker(cx, direction);
                 std::task::Poll::Pending
             }

@@ -9,13 +9,6 @@ use {
     libc::{sockaddr_in, sockaddr_in6, AF_INET, AF_INET6},
     std::os::unix::prelude::{AsRawFd, FromRawFd, IntoRawFd, RawFd},
 };
-#[cfg(windows)]
-use {
-    std::os::windows::prelude::{AsRawSocket, FromRawSocket, IntoRawSocket, RawSocket},
-    windows_sys::Win32::Networking::WinSock::{
-        AF_INET, AF_INET6, SOCKADDR_IN as sockaddr_in, SOCKADDR_IN6 as sockaddr_in6,
-    },
-};
 
 use super::stream::TcpStream;
 use crate::{
@@ -36,8 +29,6 @@ impl TcpListener {
     pub(crate) fn from_shared_fd(fd: SharedFd) -> Self {
         #[cfg(unix)]
         let sys_listener = unsafe { std::net::TcpListener::from_raw_fd(fd.raw_fd()) };
-        #[cfg(windows)]
-        let sys_listener = unsafe { std::net::TcpListener::from_raw_socket(fd.raw_socket()) };
         Self {
             fd,
             sys_listener: Some(sys_listener),
@@ -94,9 +85,6 @@ impl TcpListener {
         #[cfg(unix)]
         let fd = sys_listener.into_raw_fd();
 
-        #[cfg(windows)]
-        let fd = sys_listener.into_raw_socket();
-
         Ok(Self::from_shared_fd(SharedFd::new::<false>(fd)?))
     }
 
@@ -128,24 +116,17 @@ impl TcpListener {
                     let addr: &sockaddr_in = &*(storage as *const sockaddr_in);
                     #[cfg(unix)]
                     let ip = Ipv4Addr::from(addr.sin_addr.s_addr.to_ne_bytes());
-                    #[cfg(windows)]
-                    let ip = Ipv4Addr::from(addr.sin_addr.S_un.S_addr.to_ne_bytes());
                     let port = u16::from_be(addr.sin_port);
                     SocketAddr::V4(SocketAddrV4::new(ip, port))
                 }
                 AF_INET6 => {
-                    // Safety: if the ss_family field is AF_INET6 then storage must be a
-                    // sockaddr_in6.
+                    // Safety: if the ss_family field is AF_INET6 then storage must be a sockaddr_in6.
                     let addr: &sockaddr_in6 = &*(storage as *const sockaddr_in6);
                     #[cfg(unix)]
                     let ip = Ipv6Addr::from(addr.sin6_addr.s6_addr);
-                    #[cfg(windows)]
-                    let ip = Ipv6Addr::from(addr.sin6_addr.u.Byte);
                     let port = u16::from_be(addr.sin6_port);
                     #[cfg(unix)]
                     let scope_id = addr.sin6_scope_id;
-                    #[cfg(windows)]
-                    let scope_id = addr.Anonymous.sin6_scope_id;
                     SocketAddr::V6(SocketAddrV6::new(ip, port, addr.sin6_flowinfo, scope_id))
                 }
                 _ => {
@@ -185,8 +166,6 @@ impl TcpListener {
                     let addr: &sockaddr_in = &*(storage as *const sockaddr_in);
                     #[cfg(unix)]
                     let ip = Ipv4Addr::from(addr.sin_addr.s_addr.to_ne_bytes());
-                    #[cfg(windows)]
-                    let ip = Ipv4Addr::from(addr.sin_addr.S_un.S_addr.to_ne_bytes());
                     let port = u16::from_be(addr.sin_port);
                     SocketAddr::V4(SocketAddrV4::new(ip, port))
                 }
@@ -196,13 +175,9 @@ impl TcpListener {
                     let addr: &sockaddr_in6 = &*(storage as *const sockaddr_in6);
                     #[cfg(unix)]
                     let ip = Ipv6Addr::from(addr.sin6_addr.s6_addr);
-                    #[cfg(windows)]
-                    let ip = Ipv6Addr::from(addr.sin6_addr.u.Byte);
                     let port = u16::from_be(addr.sin6_port);
                     #[cfg(unix)]
                     let scope_id = addr.sin6_scope_id;
-                    #[cfg(windows)]
-                    let scope_id = addr.Anonymous.sin6_scope_id;
                     SocketAddr::V6(SocketAddrV6::new(ip, port, addr.sin6_flowinfo, scope_id))
                 }
                 _ => {
@@ -232,7 +207,7 @@ impl TcpListener {
 
     #[cfg(feature = "legacy")]
     fn set_non_blocking(_socket: &socket2::Socket) -> io::Result<()> {
-        crate::driver::CURRENT.with(|x| match x {
+        crate::driver::CURRENT_INNER.with(|x| match x {
             // TODO: windows ioring support
             #[cfg(all(target_os = "linux", feature = "iouring"))]
             crate::driver::Inner::Uring(_) => Ok(()),
@@ -259,14 +234,10 @@ impl TcpListener {
     pub fn from_std(stdl: std::net::TcpListener) -> io::Result<Self> {
         #[cfg(unix)]
         let fd = stdl.as_raw_fd();
-        #[cfg(windows)]
-        let fd = stdl.as_raw_socket();
         match SharedFd::new::<false>(fd) {
             Ok(shared) => {
                 #[cfg(unix)]
                 stdl.into_raw_fd();
-                #[cfg(windows)]
-                stdl.into_raw_socket();
                 Ok(Self::from_shared_fd(shared))
             }
             Err(e) => Err(e),
@@ -297,22 +268,12 @@ impl AsRawFd for TcpListener {
     }
 }
 
-#[cfg(windows)]
-impl AsRawSocket for TcpListener {
-    #[inline]
-    fn as_raw_socket(&self) -> RawSocket {
-        self.fd.raw_socket()
-    }
-}
-
 impl Drop for TcpListener {
     #[inline]
     fn drop(&mut self) {
         let listener = self.sys_listener.take().unwrap();
         #[cfg(unix)]
         listener.into_raw_fd();
-        #[cfg(windows)]
-        listener.into_raw_socket();
     }
 }
 

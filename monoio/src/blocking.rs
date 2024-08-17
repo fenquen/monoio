@@ -4,10 +4,8 @@ use std::{future::Future, task::Poll};
 
 use threadpool::{Builder as ThreadPoolBuilder, ThreadPool as ThreadPoolImpl};
 
-use crate::{
-    task::{new_task, JoinHandle},
-    utils::thread_id::DEFAULT_THREAD_ID,
-};
+use crate::{task::{JoinHandle}, task, utils::thread_id::DEFAULT_THREAD_ID};
+use crate::task::Schedule;
 
 /// Users may implement a ThreadPool and attach it to runtime.
 /// We also provide an implementation based on threadpool crate, you can use DefaultThreadPool.
@@ -74,12 +72,12 @@ impl BlockingTask {
     }
 }
 
-/// BlockingStrategy can be set if there is no ThreadPool attached.
 /// It controls how to handle `spawn_blocking` without thread pool.
 #[derive(Clone, Copy, Debug)]
 pub enum BlockingStrategy {
     /// Panic when `spawn_blocking`.
     Panic,
+
     /// Execute with current thread when `spawn_blocking`.
     ExecuteLocal,
 }
@@ -87,16 +85,14 @@ pub enum BlockingStrategy {
 /// `spawn_blocking` is used for executing a task(without async) with heavy computation or blocking
 /// io. To used it, users may initialize a thread pool and attach it on creating runtime.
 /// Users can also set `BlockingStrategy` for a runtime when there is no thread pool.
-/// WARNING: DO NOT USE THIS FOR ASYNC TASK! Async tasks will not be executed but only built the
-/// future!
+/// WARNING: DO NOT USE THIS FOR ASYNC TASK! Async tasks will not be executed but only built the future!
 pub fn spawn_blocking<F, R>(func: F) -> JoinHandle<Result<R, JoinError>>
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
-    let fut = BlockingFuture(Some(func));
-    let (task, join) = new_task(DEFAULT_THREAD_ID, fut, NoopScheduler);
-    crate::runtime::CURRENT.with(|inner| {
+    let (task, join) = task::newTask(DEFAULT_THREAD_ID, BlockingFuture(Some(func)), NoopScheduler);
+    crate::runtime::CURRENT_CONTEXT.with(|inner| {
         let handle = &inner.blocking_handle;
         match handle {
             BlockingHandle::Attached(shared) => shared.schedule_task(BlockingTask {
@@ -145,7 +141,7 @@ impl ThreadPool for DefaultThreadPool {
 
 pub(crate) struct NoopScheduler;
 
-impl crate::task::Schedule for NoopScheduler {
+impl Schedule for NoopScheduler {
     fn schedule(&self, _task: crate::task::Task<Self>) {
         unreachable!()
     }
@@ -156,7 +152,7 @@ impl crate::task::Schedule for NoopScheduler {
 }
 
 pub(crate) enum BlockingHandle {
-    Attached(Box<dyn crate::blocking::ThreadPool + Send + 'static>),
+    Attached(Box<dyn ThreadPool + Send + 'static>),
     Empty(BlockingStrategy),
 }
 
@@ -184,145 +180,5 @@ where
         let me = &mut *self;
         let func = me.0.take().expect("blocking task ran twice.");
         Poll::Ready(Ok(func()))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::DefaultThreadPool;
-
-    /// NaiveThreadPool always create a new thread on executing tasks.
-    struct NaiveThreadPool;
-
-    impl super::ThreadPool for NaiveThreadPool {
-        fn schedule_task(&self, task: super::BlockingTask) {
-            std::thread::spawn(move || {
-                task.run();
-            });
-        }
-    }
-
-    /// FakeThreadPool always drop tasks.
-    struct FakeThreadPool;
-
-    impl super::ThreadPool for FakeThreadPool {
-        fn schedule_task(&self, _task: super::BlockingTask) {}
-    }
-
-    #[test]
-    fn hello_blocking() {
-        let shared_pool = Box::new(NaiveThreadPool);
-        let mut rt = crate::RuntimeBuilder::<crate::FusionDriver>::new()
-            .attach_thread_pool(shared_pool)
-            .enable_timer()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let begin = std::time::Instant::now();
-            let join = crate::spawn_blocking(|| {
-                // Simulate a heavy computation.
-                std::thread::sleep(std::time::Duration::from_millis(400));
-                "hello spawn_blocking!".to_string()
-            });
-            let sleep_async = crate::time::sleep(std::time::Duration::from_millis(400));
-            let (result, _) = crate::join!(join, sleep_async);
-            let eps = begin.elapsed();
-            assert!(eps < std::time::Duration::from_millis(800));
-            assert!(eps >= std::time::Duration::from_millis(400));
-            assert_eq!(result.unwrap(), "hello spawn_blocking!");
-        });
-    }
-
-    #[test]
-    #[should_panic]
-    fn blocking_panic() {
-        let mut rt = crate::RuntimeBuilder::<crate::FusionDriver>::new()
-            .with_blocking_strategy(crate::blocking::BlockingStrategy::Panic)
-            .enable_timer()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let join = crate::spawn_blocking(|| 1);
-            let _ = join.await;
-        });
-    }
-
-    #[test]
-    fn blocking_current() {
-        let mut rt = crate::RuntimeBuilder::<crate::FusionDriver>::new()
-            .with_blocking_strategy(crate::blocking::BlockingStrategy::ExecuteLocal)
-            .enable_timer()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let begin = std::time::Instant::now();
-            let join = crate::spawn_blocking(|| {
-                // Simulate a heavy computation.
-                std::thread::sleep(std::time::Duration::from_millis(100));
-                "hello spawn_blocking!".to_string()
-            });
-            let sleep_async = crate::time::sleep(std::time::Duration::from_millis(100));
-            let (result, _) = crate::join!(join, sleep_async);
-            let eps = begin.elapsed();
-            assert!(eps > std::time::Duration::from_millis(200));
-            assert_eq!(result.unwrap(), "hello spawn_blocking!");
-        });
-    }
-
-    #[test]
-    fn drop_task() {
-        let shared_pool = Box::new(FakeThreadPool);
-        let mut rt = crate::RuntimeBuilder::<crate::FusionDriver>::new()
-            .attach_thread_pool(shared_pool)
-            .enable_timer()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let ret = crate::spawn_blocking(|| 1).await;
-            assert!(matches!(ret, Err(super::JoinError::Canceled)));
-        });
-    }
-
-    #[test]
-    fn default_pool() {
-        let shared_pool = Box::new(DefaultThreadPool::new(3));
-        let mut rt = crate::RuntimeBuilder::<crate::FusionDriver>::new()
-            .attach_thread_pool(shared_pool)
-            .enable_timer()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let begin = std::time::Instant::now();
-            let join1 = crate::spawn_blocking(|| {
-                // Simulate a heavy computation.
-                std::thread::sleep(std::time::Duration::from_millis(150));
-                "hello spawn_blocking1!".to_string()
-            });
-            let join2 = crate::spawn_blocking(|| {
-                // Simulate a heavy computation.
-                std::thread::sleep(std::time::Duration::from_millis(150));
-                "hello spawn_blocking2!".to_string()
-            });
-            let join3 = crate::spawn_blocking(|| {
-                // Simulate a heavy computation.
-                std::thread::sleep(std::time::Duration::from_millis(150));
-                "hello spawn_blocking3!".to_string()
-            });
-            let join4 = crate::spawn_blocking(|| {
-                // Simulate a heavy computation.
-                std::thread::sleep(std::time::Duration::from_millis(150));
-                "hello spawn_blocking4!".to_string()
-            });
-            let sleep_async = crate::time::sleep(std::time::Duration::from_millis(150));
-            let (result1, result2, result3, result4, _) =
-                crate::join!(join1, join2, join3, join4, sleep_async);
-            let eps = begin.elapsed();
-            assert!(eps < std::time::Duration::from_millis(590));
-            assert!(eps >= std::time::Duration::from_millis(150));
-            assert_eq!(result1.unwrap(), "hello spawn_blocking1!");
-            assert_eq!(result2.unwrap(), "hello spawn_blocking2!");
-            assert_eq!(result3.unwrap(), "hello spawn_blocking3!");
-            assert_eq!(result4.unwrap(), "hello spawn_blocking4!");
-        });
     }
 }

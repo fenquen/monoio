@@ -59,16 +59,13 @@ impl<T: IoBuf> OpAble for Write<T> {
     #[cfg(any(feature = "legacy", feature = "poll-io"))]
     #[inline]
     fn legacy_interest(&self) -> Option<(Direction, usize)> {
-        self.fd
-            .registered_index()
-            .map(|idx| (Direction::Write, idx))
+        self.fd.registered_index().map(|idx| (Direction::Write, idx))
     }
 
     #[cfg(all(any(feature = "legacy", feature = "poll-io"), unix))]
     fn legacy_call(&mut self) -> io::Result<u32> {
         let fd = self.fd.as_raw_fd();
-        let seek_offset = libc::off_t::try_from(self.offset)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "offset too big"))?;
+        let seek_offset = libc::off_t::try_from(self.offset).map_err(|_| io::Error::new(io::ErrorKind::Other, "offset too big"))?;
         #[cfg(not(target_os = "macos"))]
         return syscall_u32!(pwrite64(
             fd,

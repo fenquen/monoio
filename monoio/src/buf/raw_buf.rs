@@ -1,8 +1,4 @@
 use std::ptr::null;
-
-#[cfg(windows)]
-use windows_sys::Win32::Networking::WinSock::WSABUF;
-
 use super::{IoBuf, IoBufMut, IoVecBuf, IoVecBufMut};
 
 /// RawBuf is not a real buf. It only hold the pointer of the buffer.
@@ -77,14 +73,6 @@ impl RawBuf {
             let iovec = *data.write_iovec_ptr();
             Some(Self::new(iovec.iov_base as *const u8, iovec.iov_len))
         }
-        #[cfg(windows)]
-        {
-            if data.write_wsabuf_len() == 0 {
-                return None;
-            }
-            let wsabuf = *data.write_wsabuf_ptr();
-            Some(Self::new(wsabuf.buf as *const u8, wsabuf.len as _))
-        }
     }
 
     /// Create a new RawBuf with the first iovec part.
@@ -100,14 +88,6 @@ impl RawBuf {
             let iovec = *data.read_iovec_ptr();
             Some(Self::new(iovec.iov_base as *const u8, iovec.iov_len))
         }
-        #[cfg(windows)]
-        {
-            if data.read_wsabuf_len() == 0 {
-                return None;
-            }
-            let wsabuf = *data.read_wsabuf_ptr();
-            Some(Self::new(wsabuf.buf as *const u8, wsabuf.len as _))
-        }
     }
 }
 
@@ -118,8 +98,7 @@ impl RawBuf {
 pub struct RawBufVectored {
     #[cfg(unix)]
     ptr: *const libc::iovec,
-    #[cfg(windows)]
-    ptr: *const WSABUF,
+
     len: usize,
 }
 
@@ -130,15 +109,6 @@ impl RawBufVectored {
     #[cfg(unix)]
     #[inline]
     pub const unsafe fn new(ptr: *const libc::iovec, len: usize) -> Self {
-        Self { ptr, len }
-    }
-
-    /// Create a new RawBuf with given pointer and length.
-    /// # Safety
-    /// make sure the pointer and length is valid when RawBuf is used.
-    #[cfg(windows)]
-    #[inline]
-    pub const unsafe fn new(ptr: *const WSABUF, len: usize) -> Self {
         Self { ptr, len }
     }
 }
@@ -155,18 +125,6 @@ unsafe impl IoVecBuf for RawBufVectored {
     fn read_iovec_len(&self) -> usize {
         self.len
     }
-
-    #[cfg(windows)]
-    #[inline]
-    fn read_wsabuf_ptr(&self) -> *const WSABUF {
-        self.ptr
-    }
-
-    #[cfg(windows)]
-    #[inline]
-    fn read_wsabuf_len(&self) -> usize {
-        self.len
-    }
 }
 
 unsafe impl IoVecBufMut for RawBufVectored {
@@ -177,18 +135,6 @@ unsafe impl IoVecBufMut for RawBufVectored {
 
     #[cfg(unix)]
     fn write_iovec_len(&mut self) -> usize {
-        self.len
-    }
-
-    #[cfg(windows)]
-    #[inline]
-    fn write_wsabuf_ptr(&mut self) -> *mut WSABUF {
-        self.ptr as *mut WSABUF
-    }
-
-    #[cfg(windows)]
-    #[inline]
-    fn write_wsabuf_len(&mut self) -> usize {
         self.len
     }
 

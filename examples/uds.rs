@@ -39,7 +39,3 @@ async fn main() {
     drop(listener);
     std::fs::remove_file(ADDRESS).ok();
 }
-
-#[cfg(windows)]
-#[monoio::main]
-async fn main() {}

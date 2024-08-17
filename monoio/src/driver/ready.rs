@@ -3,6 +3,9 @@
 
 use std::{fmt, ops};
 
+#[allow(dead_code)]
+pub(crate) const RW_INTERESTS: mio::Interest = mio::Interest::READABLE.add(mio::Interest::WRITABLE);
+
 const READABLE: u8 = 0b0_01;
 const WRITABLE: u8 = 0b0_10;
 const READ_CLOSED: u8 = 0b0_0100;
@@ -45,58 +48,35 @@ impl Ready {
     pub(crate) const READ_ALL: Ready = Ready(READABLE | READ_CLOSED | READ_CANCELED);
     pub(crate) const WRITE_ALL: Ready = Ready(WRITABLE | WRITE_CLOSED | WRITE_CANCELED);
 
-    #[cfg(windows)]
-    pub(crate) fn from_mio(event: &super::legacy::iocp::Event) -> Ready {
-        let mut ready = Ready::EMPTY;
-
-        if event.is_readable() {
-            ready |= Ready::READABLE;
-        }
-
-        if event.is_writable() {
-            ready |= Ready::WRITABLE;
-        }
-
-        if event.is_read_closed() {
-            ready |= Ready::READ_CLOSED;
-        }
-
-        if event.is_write_closed() {
-            ready |= Ready::WRITE_CLOSED;
-        }
-
-        ready
-    }
-
     #[cfg(unix)]
     // Must remain crate-private to avoid adding a public dependency on Mio.
-    pub(crate) fn from_mio(event: &mio::event::Event) -> Ready {
+    pub(crate) fn fromMioEvent(mioEvent: &mio::event::Event) -> Ready {
         let mut ready = Ready::EMPTY;
 
         #[cfg(all(target_os = "freebsd", feature = "net"))]
         {
-            if event.is_aio() {
+            if mioEvent.is_aio() {
                 ready |= Ready::READABLE;
             }
 
-            if event.is_lio() {
+            if mioEvent.is_lio() {
                 ready |= Ready::READABLE;
             }
         }
 
-        if event.is_readable() {
+        if mioEvent.is_readable() {
             ready |= Ready::READABLE;
         }
 
-        if event.is_writable() {
+        if mioEvent.is_writable() {
             ready |= Ready::WRITABLE;
         }
 
-        if event.is_read_closed() {
+        if mioEvent.is_read_closed() {
             ready |= Ready::READ_CLOSED;
         }
 
-        if event.is_write_closed() {
+        if mioEvent.is_write_closed() {
             ready |= Ready::WRITE_CLOSED;
         }
 
@@ -241,6 +221,3 @@ impl Direction {
         }
     }
 }
-
-#[allow(dead_code)]
-pub(crate) const RW_INTERESTS: mio::Interest = mio::Interest::READABLE.add(mio::Interest::WRITABLE);
