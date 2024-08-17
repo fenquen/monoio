@@ -7,8 +7,7 @@ static ID_GEN: AtomicUsize = AtomicUsize::new(16);
 
 pub(crate) const SPAWN_BLOCKING_THREAD_ID: usize = 0;
 
-/// Used to generate thread id.
-pub(crate) fn gen_id() -> usize {
+pub(crate) fn generateThreadId() -> usize {
     ID_GEN.fetch_add(1, Relaxed)
 }
 

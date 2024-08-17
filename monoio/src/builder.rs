@@ -5,7 +5,7 @@ use crate::driver::IoUringDriver;
 #[cfg(feature = "legacy")]
 use crate::driver::LegacyDriver;
 #[cfg(any(feature = "legacy", feature = "iouring"))]
-use crate::utils::thread_id::gen_id;
+use crate::utils::thread_id::generateThreadId;
 use crate::{
     driver::Driver,
     time::{driver::TimeDriver, Clock},
@@ -87,12 +87,12 @@ direct_build!(TimeDriver<LegacyDriver>);
 #[cfg(feature = "legacy")]
 impl Buildable for LegacyDriver {
     fn buildRuntime(runtimeBuilder: RuntimeBuilder<LegacyDriver>) -> io::Result<Runtime<LegacyDriver>> {
-        let thread_id = gen_id();
+        let threadId = generateThreadId();
 
         #[cfg(feature = "sync")]
         let blocking_handle = runtimeBuilder.blocking_handle;
 
-        BUILD_THREAD_ID.set(&thread_id, || {
+        BUILD_THREAD_ID.set(&threadId, || {
             let legacyDriver = match runtimeBuilder.entries {
                 Some(entries) => LegacyDriver::new_with_entries(entries)?,
                 None => LegacyDriver::new()?,
@@ -112,7 +112,7 @@ impl Buildable for LegacyDriver {
 #[cfg(all(target_os = "linux", feature = "iouring"))]
 impl Buildable for IoUringDriver {
     fn buildRuntime(this: RuntimeBuilder<Self>) -> io::Result<Runtime<IoUringDriver>> {
-        let thread_id = gen_id();
+        let thread_id = generateThreadId();
         #[cfg(feature = "sync")]
         let blocking_handle = this.blocking_handle;
 

@@ -58,10 +58,10 @@ pub(crate) struct Context {
 impl Context {
     #[cfg(feature = "sync")]
     pub(crate) fn new(blocking_handle: BlockingHandle) -> Context {
-        let thread_id = crate::builder::BUILD_THREAD_ID.with(|id| *id);
+        let threadId = crate::builder::BUILD_THREAD_ID.with(|id| *id);
 
         Context {
-            threadId: thread_id,
+            threadId,
             threadId_unpark: RefCell::new(FxHashMap::default()),
             threadId_wakerSender: RefCell::new(FxHashMap::default()),
             taskQueue: TaskQueue::default(),
