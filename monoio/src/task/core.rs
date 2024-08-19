@@ -103,8 +103,6 @@ impl<T: Future> CoreStage<T> {
 
     /// Drop the future
     ///
-    /// # Safety
-    ///
     /// The caller must ensure it is safe to mutate the `stage` field.
     pub(crate) fn drop_future_or_output(&self) {
         // Safety: the caller ensures mutual exclusion to the field.

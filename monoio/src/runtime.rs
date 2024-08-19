@@ -347,7 +347,7 @@ impl From<Runtime<TimeDriver<IoUringDriver>>> for FusionRuntime<TimeDriver<IoUri
 ///
 /// [`JoinHandle`]: monoio::task::JoinHandle
 ///
-/// ```no_run
+/// ```
 /// #[monoio::main]
 /// async fn main() {
 ///     let handle = monoio::spawn(async {

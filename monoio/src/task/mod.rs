@@ -67,14 +67,9 @@ pub(crate) trait Schedule: Sized + 'static {
     }
 }
 
-pub(crate) fn newTask<T, S>(threadId: usize,
+pub(crate) fn newTask<T: Future<Output: 'static> + 'static, S:Schedule>(threadId: usize,
                             future: T,
-                            scheduler: S) -> (Task<S>, JoinHandle<T::Output>)
-where
-    S: Schedule,
-    T: Future + 'static,
-    T::Output: 'static,
-{
+                            scheduler: S) -> (Task<S>, JoinHandle<T::Output>) {
     unsafe { new_task_holding(threadId, future, scheduler) }
 }
 
