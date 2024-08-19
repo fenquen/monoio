@@ -78,13 +78,9 @@ where
     unsafe { new_task_holding(threadId, future, scheduler) }
 }
 
-pub(crate) unsafe fn new_task_holding<T, S>(threadId: usize,
+pub(crate) unsafe fn new_task_holding<T:Future, S:Schedule>(threadId: usize,
                                             future: T,
-                                            scheduler: S) -> (Task<S>, JoinHandle<T::Output>)
-where
-    S: Schedule,
-    T: Future,
-{
+                                            scheduler: S) -> (Task<S>, JoinHandle<T::Output>) {
     let rawTask = RawTask::new::<T, S>(threadId, future, scheduler);
 
     let task = Task {
