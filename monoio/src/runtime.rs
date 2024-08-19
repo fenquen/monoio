@@ -344,7 +344,6 @@ impl From<Runtime<TimeDriver<IoUringDriver>>> for FusionRuntime<TimeDriver<IoUri
 /// runtime is shutdown, all outstanding tasks are dropped, regardless of the
 /// lifecycle of that task.
 ///
-///
 /// [`JoinHandle`]: monoio::task::JoinHandle
 ///
 /// ```
