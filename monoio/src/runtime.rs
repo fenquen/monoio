@@ -358,11 +358,7 @@ impl From<Runtime<TimeDriver<IoUringDriver>>> for FusionRuntime<TimeDriver<IoUri
 ///     handle.await;
 /// }
 /// ```
-pub fn spawn<T>(future: T) -> JoinHandle<T::Output>
-where
-    T: Future + 'static,
-    T::Output: 'static,
-{
+pub fn spawn<T: Future<Output: 'static> + 'static>(future: T) -> JoinHandle<T::Output> {
     let (task, join) =
         crate::task::newTask(thread_id::get_current_thread_id(), future, LocalScheduler);
 
@@ -372,10 +368,7 @@ where
 }
 
 #[cfg(feature = "sync")]
-unsafe fn spawn_without_static<T>(future: T) -> JoinHandle<T::Output>
-where
-    T: Future,
-{
+unsafe fn spawn_without_static<T: Future>(future: T) -> JoinHandle<T::Output> {
     let (task, join) =
         crate::task::new_task_holding(thread_id::get_current_thread_id(), future, LocalScheduler);
 

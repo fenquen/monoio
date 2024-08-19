@@ -1,7 +1,7 @@
 use std::{cell::UnsafeCell, future::Future, mem, pin::Pin, task::{Context, Poll, Waker}};
 
 use super::{
-    raw_task::{self, Vtable},
+    raw_task::{self, RawTaskVtable},
     state::State,
     utils::UnsafeCellExt,
     Schedule,
@@ -20,7 +20,7 @@ impl<T: Future, S: Schedule> Cell<T, S> {
         Box::new(Cell {
             header: Header {
                 state: State::new(),
-                vtable: raw_task::vtable::<T, S>(),
+                rawTaskVtable: raw_task::buildRawTaskVtable::<T, S>(),
                 threadId,
             },
             core: Core {
@@ -41,7 +41,7 @@ pub(crate) struct Header {
     pub(crate) state: State,
 
     /// Table of function pointers for executing actions on the task.
-    pub(crate) vtable: &'static Vtable,
+    pub(crate) rawTaskVtable: &'static RawTaskVtable,
 
     /// Thread ID(sync: used for wake task on its thread; sync disabled: do checking)
     pub(crate) threadId: usize,

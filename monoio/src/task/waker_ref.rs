@@ -2,7 +2,6 @@ use std::{
     future::Future,
     marker::PhantomData,
     mem::ManuallyDrop,
-    ops,
     ptr::NonNull,
     task::{RawWaker, RawWakerVTable, Waker},
 };
@@ -38,6 +37,18 @@ impl<S> Deref for WakerRef<'_, S> {
     }
 }
 
+pub(super) fn buildRawWaker<T: Future, S: Schedule>(headerPtr: *const Header) -> RawWaker {
+    let rawWakerVTable =
+        &RawWakerVTable::new(
+            clone::<T, S>,
+            wake_by_val::<T, S>,
+            wake_by_ref::<T, S>,
+            drop_waker::<T, S>,
+        );
+
+    RawWaker::new(headerPtr as *const (), rawWakerVTable)
+}
+
 unsafe fn clone<T: Future, S: Schedule>(ptr: *const ()) -> RawWaker {
     let headerPtr = ptr as *const Header;
     (*headerPtr).state.ref_inc();
@@ -65,16 +76,4 @@ unsafe fn drop_waker<T: Future, S: Schedule>(ptr: *const ()) {
     let harness = Harness::<T, S>::fromCellHeaderPtr(headerPtr);
 
     harness.drop_reference();
-}
-
-pub(super) fn buildRawWaker<T: Future, S: Schedule>(headerPtr: *const Header) -> RawWaker {
-    let rawWakerVTable =
-        &RawWakerVTable::new(
-            clone::<T, S>,
-            wake_by_val::<T, S>,
-            wake_by_ref::<T, S>,
-            drop_waker::<T, S>,
-        );
-
-    RawWaker::new(headerPtr as *const (), rawWakerVTable)
 }
